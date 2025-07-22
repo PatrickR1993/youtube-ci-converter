@@ -60,9 +60,22 @@ class AudioTranslator:
             
         # Update progress tracker
         if progress_tracker:
-            progress_tracker.update_step('translation', 0, "Transcribing audio with Whisper")
+            progress_tracker.update_step('translation', 0, "Checking audio file size")
+        
+        # Check file size and chunk if necessary (OpenAI has ~26MB limit)
+        file_size = audio_file.stat().st_size
+        max_size = 25 * 1024 * 1024  # 25MB to be safe
+        file_size_mb = file_size / (1024 * 1024)
+        
+        if file_size > max_size:
+            if progress_tracker:
+                progress_tracker.update_step('translation', 5, f"Large file ({file_size_mb:.1f}MB), chunking audio...")
+            return self._transcribe_large_audio(audio_file, progress_tracker)
         
         try:
+            if progress_tracker:
+                progress_tracker.update_step('translation', 10, "Transcribing audio with Whisper")
+                
             with open(audio_file, "rb") as audio:
                 # Use Whisper API for transcription with timestamps
                 response = self.openai_client.audio.transcriptions.create(
@@ -133,6 +146,118 @@ class AudioTranslator:
             
         except Exception as e:
             print(f"❌ Whisper transcription failed: {e}")
+            return []
+    
+    def _transcribe_large_audio(self, audio_file: Path, progress_tracker=None) -> List[Dict]:
+        """Transcribe large audio files by chunking them into smaller pieces.
+        
+        Args:
+            audio_file: Path to the large audio file
+            progress_tracker: Optional UnifiedProgressTracker for progress updates
+            
+        Returns:
+            List of dictionaries with text, start_time, end_time (merged from all chunks)
+        """
+        try:
+            # Load the audio file
+            if progress_tracker:
+                progress_tracker.update_step('translation', 5, "Loading audio file for chunking")
+            
+            audio = AudioSegment.from_file(audio_file)
+            
+            # Calculate chunk duration (aim for ~20MB chunks, roughly 10-15 minutes depending on quality)
+            # This is conservative to stay well under the 26MB limit
+            chunk_duration_ms = 10 * 60 * 1000  # 10 minutes in milliseconds
+            
+            chunks = []
+            total_duration = len(audio)
+            num_chunks = (total_duration + chunk_duration_ms - 1) // chunk_duration_ms  # Ceiling division
+            
+            if progress_tracker:
+                progress_tracker.update_step('translation', 10, f"Splitting audio into {num_chunks} chunks")
+            
+            # Split audio into chunks
+            for i in range(0, total_duration, chunk_duration_ms):
+                chunk = audio[i:i + chunk_duration_ms]
+                chunk_start_time = i / 1000.0  # Convert to seconds
+                chunks.append((chunk, chunk_start_time))
+            
+            all_sentences = []
+            
+            # Process each chunk
+            for chunk_idx, (chunk, chunk_start_time) in enumerate(chunks):
+                if progress_tracker:
+                    chunk_progress = 15 + (chunk_idx / len(chunks)) * 70  # 15-85% for chunk processing
+                    progress_tracker.update_step('translation', chunk_progress, 
+                                                f"Transcribing chunk {chunk_idx + 1}/{len(chunks)}")
+                
+                # Export chunk to temporary file
+                chunk_file = self.temp_dir / f"chunk_{chunk_idx}.wav"
+                chunk.export(chunk_file, format="wav")
+                
+                try:
+                    # Transcribe this chunk
+                    with open(chunk_file, "rb") as audio_chunk:
+                        response = self.openai_client.audio.transcriptions.create(
+                            model="whisper-1",
+                            file=audio_chunk,
+                            language="ja",  # Japanese
+                            response_format="verbose_json",
+                            timestamp_granularities=["segment"]
+                        )
+                    
+                    # Process segments and adjust timestamps
+                    for segment in response.segments:
+                        try:
+                            # Try attribute access first (newer OpenAI library)
+                            text = segment.text.strip()
+                            start_time = segment.start + chunk_start_time
+                            end_time = segment.end + chunk_start_time
+                            
+                            if text:  # Only add non-empty segments
+                                all_sentences.append({
+                                    "text": text,
+                                    "start_time": start_time,
+                                    "end_time": end_time
+                                })
+                                
+                        except AttributeError:
+                            # Fallback to dictionary access
+                            try:
+                                text = segment["text"].strip()
+                                start_time = segment["start"] + chunk_start_time
+                                end_time = segment["end"] + chunk_start_time
+                                
+                                if text:
+                                    all_sentences.append({
+                                        "text": text,
+                                        "start_time": start_time,
+                                        "end_time": end_time
+                                    })
+                                    
+                            except (KeyError, TypeError):
+                                print(f"⚠️  Could not parse segment in chunk {chunk_idx}")
+                                continue
+                
+                except Exception as e:
+                    print(f"⚠️  Failed to transcribe chunk {chunk_idx + 1}: {e}")
+                    continue
+                
+                finally:
+                    # Clean up temporary chunk file
+                    if chunk_file.exists():
+                        chunk_file.unlink()
+                
+                # Small delay between API calls
+                time.sleep(0.5)
+            
+            if progress_tracker:
+                progress_tracker.update_step('translation', 90, f"Merged {len(all_sentences)} segments from {len(chunks)} chunks")
+            
+            return all_sentences
+            
+        except Exception as e:
+            print(f"❌ Large audio transcription failed: {e}")
             return []
     
     def translate_sentences(self, sentences: List[Dict], progress_tracker=None) -> List[Dict]:
@@ -398,6 +523,19 @@ class AudioTranslator:
         
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(transcript_data, f, ensure_ascii=False, indent=2)
+    
+    def cleanup(self):
+        """Clean up temporary files and directories."""
+        try:
+            import shutil
+            if self.temp_dir.exists():
+                shutil.rmtree(self.temp_dir)
+        except Exception as e:
+            print(f"⚠️  Warning: Could not clean up temporary directory: {e}")
+    
+    def __del__(self):
+        """Destructor to ensure cleanup."""
+        self.cleanup()
 
 
 def find_mp3_files(directory: Path) -> List[Path]:
@@ -500,37 +638,42 @@ def main():
     print(f"\n🎯 Processing: {input_file.name}")
     print(f"📤 Output directory: {output_dir}")
     
-    # Step 1: Extract sentences with timing using Whisper
-    sentences = translator.extract_sentences_whisper(input_file)
+    try:
+        # Step 1: Extract sentences with timing using Whisper
+        sentences = translator.extract_sentences_whisper(input_file)
+        
+        if not sentences:
+            print("❌ No sentences could be extracted from the audio")
+            sys.exit(1)
+        
+        # Step 2: Translate sentences
+        translated_sentences = translator.translate_sentences(sentences)
+        
+        # Step 3: Save transcript
+        translator.save_transcript(translated_sentences, transcript_file)
+        
+        # Step 4: Create bilingual audio
+        success = translator.create_bilingual_audio(
+            input_file, 
+            translated_sentences, 
+            bilingual_file
+        )
+        
+        if success:
+            print(f"\n🎉 Translation completed successfully!")
+            print(f"📄 Transcript: {transcript_file}")
+            print(f"🎵 Bilingual audio: {bilingual_file}")
+            print(f"\n💡 The bilingual audio contains:")
+            print(f"   - English translation (spoken)")
+            print(f"   - Original Japanese (from source)")
+            print(f"   - Pattern: EN → JP → EN → JP...")
+        else:
+            print("\n❌ Translation failed")
+            sys.exit(1)
     
-    if not sentences:
-        print("❌ No sentences could be extracted from the audio")
-        sys.exit(1)
-    
-    # Step 2: Translate sentences
-    translated_sentences = translator.translate_sentences(sentences)
-    
-    # Step 3: Save transcript
-    translator.save_transcript(translated_sentences, transcript_file)
-    
-    # Step 4: Create bilingual audio
-    success = translator.create_bilingual_audio(
-        input_file, 
-        translated_sentences, 
-        bilingual_file
-    )
-    
-    if success:
-        print(f"\n🎉 Translation completed successfully!")
-        print(f"📄 Transcript: {transcript_file}")
-        print(f"🎵 Bilingual audio: {bilingual_file}")
-        print(f"\n💡 The bilingual audio contains:")
-        print(f"   - English translation (spoken)")
-        print(f"   - Original Japanese (from source)")
-        print(f"   - Pattern: EN → JP → EN → JP...")
-    else:
-        print("\n❌ Translation failed")
-        sys.exit(1)
+    finally:
+        # Clean up temporary files
+        translator.cleanup()
 
 
 if __name__ == "__main__":
