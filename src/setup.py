@@ -131,9 +131,6 @@ def test_installation():
         import pydub
         print("✅ pydub import successful")
         
-        import tqdm
-        print("✅ tqdm import successful")
-        
         try:
             import openai
             print("✅ openai import successful")

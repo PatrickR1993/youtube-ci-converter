@@ -6,7 +6,6 @@ Handles downloading and converting YouTube videos to MP3 format.
 
 import sys
 import time
-import threading
 from pathlib import Path
 
 try:
@@ -18,22 +17,6 @@ except ImportError:
 
 from progress_tracker import DownloadProgressHook
 from utils import sanitize_filename
-
-
-def simulate_conversion_progress(progress_hook, stop_event):
-    """Simulate conversion progress while the actual conversion is happening."""
-    if not progress_hook or not progress_hook.conversion_started:
-        return
-    
-    # Simulate gradual progress from 80% to 95% over conversion time
-    current_progress = 80
-    increment = 1
-    
-    while not stop_event.is_set() and current_progress < 95:
-        time.sleep(0.5)  # Update every 0.5 seconds
-        current_progress += increment
-        if progress_hook.progress_tracker:
-            progress_hook.progress_tracker.update_step('download', current_progress, "Converting to MP3...")
 
 
 def download_youtube_video(url, output_dir, progress_tracker=None):
@@ -96,32 +79,10 @@ def download_youtube_video(url, output_dir, progress_tracker=None):
         if progress_hook:
             ydl_opts['progress_hooks'] = [progress_hook]
         
-        # Set up conversion progress simulation
-        stop_conversion_simulation = threading.Event()
-        conversion_thread = None
-        
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Download and convert
-                ydl.download([url])
-                
-                # Start conversion progress simulation after download
-                if progress_hook and progress_hook.conversion_started:
-                    conversion_thread = threading.Thread(
-                        target=simulate_conversion_progress, 
-                        args=(progress_hook, stop_conversion_simulation)
-                    )
-                    conversion_thread.daemon = True
-                    conversion_thread.start()
-                    
-                    # Give conversion some time to complete
-                    time.sleep(1.0)
-        
-        finally:
-            # Stop conversion simulation
-            stop_conversion_simulation.set()
-            if conversion_thread and conversion_thread.is_alive():
-                conversion_thread.join(timeout=1.0)
+        # Simple download without complex threading
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # Download and convert
+            ydl.download([url])
         
         # Mark conversion as complete
         if progress_hook:

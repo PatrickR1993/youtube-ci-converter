@@ -17,12 +17,11 @@ try:
     from pydub import AudioSegment
     from pydub.silence import split_on_silence
     import tempfile
-    from tqdm import tqdm
 except ImportError as e:
     missing_package = str(e).split("'")[1] if "'" in str(e) else str(e)
     print(f"Error: Required package '{missing_package}' is not installed.")
     print("Please install required packages using:")
-    print("pip install openai pydub tqdm")
+    print("pip install openai pydub")
     print("Also install system dependencies:")
     print("- Ubuntu/Debian: sudo apt install ffmpeg")
     print("- macOS: brew install ffmpeg")
@@ -57,6 +56,42 @@ class AudioTranslator:
         
         self.temp_dir = Path(tempfile.mkdtemp())
         
+    def _estimate_chunk_size(self, chunk_duration_ms: int, bytes_per_ms: float) -> float:
+        """Estimate the file size of a chunk in MB.
+        
+        Args:
+            chunk_duration_ms: Duration of chunk in milliseconds
+            bytes_per_ms: Estimated bytes per millisecond from original file
+            
+        Returns:
+            Estimated size in MB
+        """
+        estimated_bytes = chunk_duration_ms * bytes_per_ms
+        return estimated_bytes / (1024 * 1024)
+    
+    def _get_safe_chunk_duration(self, audio_file: Path, audio_duration_ms: int) -> int:
+        """Calculate a safe chunk duration to stay under API limits.
+        
+        Args:
+            audio_file: Path to the original audio file
+            audio_duration_ms: Total duration in milliseconds
+            
+        Returns:
+            Safe chunk duration in milliseconds
+        """
+        original_file_size = audio_file.stat().st_size
+        bytes_per_ms = original_file_size / audio_duration_ms
+        
+        # Target 18MB per chunk to stay well under 26MB limit
+        target_chunk_size = 18 * 1024 * 1024
+        optimal_chunk_duration_ms = int(target_chunk_size / bytes_per_ms)
+        
+        # Ensure chunks are between 3-6 minutes for safety and efficiency
+        min_chunk_duration = 3 * 60 * 1000   # 3 minutes
+        max_chunk_duration = 6 * 60 * 1000   # 6 minutes
+        
+        return max(min_chunk_duration, min(optimal_chunk_duration_ms, max_chunk_duration))
+        
     def extract_sentences_whisper(self, audio_file: Path, progress_tracker=None) -> List[Dict]:
         """Extract Japanese sentences using OpenAI Whisper API.
         
@@ -76,17 +111,17 @@ class AudioTranslator:
         
         # Check file size and chunk if necessary (OpenAI has ~26MB limit)
         file_size = audio_file.stat().st_size
-        max_size = 25 * 1024 * 1024  # 25MB to be safe
+        max_size = 20 * 1024 * 1024  # 20MB to be very safe (was 25MB)
         file_size_mb = file_size / (1024 * 1024)
         
         if file_size > max_size:
             if progress_tracker:
-                progress_tracker.update_step('translation', 5, f"Large file ({file_size_mb:.1f}MB), chunking audio...")
+                progress_tracker.update_step('translation', 5, f"Large file ({file_size_mb:.1f}MB) - will process in chunks")
             return self._transcribe_large_audio(audio_file, progress_tracker)
         
         try:
             if progress_tracker:
-                progress_tracker.update_step('translation', 10, "Transcribing audio with Whisper")
+                progress_tracker.update_step('translation', 10, f"Transcribing audio ({file_size_mb:.1f}MB)")
                 
             with open(audio_file, "rb") as audio:
                 # Use Whisper API for transcription with timestamps
@@ -100,7 +135,7 @@ class AudioTranslator:
             
             # Update progress after API call
             if progress_tracker:
-                progress_tracker.update_step('translation', 15, "Processing transcription")
+                progress_tracker.update_step('translation', 15, f"Transcription complete - processing {len(response.segments)} segments")
             
             sentences = []
             for i, segment in enumerate(response.segments):
@@ -152,7 +187,7 @@ class AudioTranslator:
             
             # Update progress tracker
             if progress_tracker:
-                progress_tracker.update_step('translation', 30, f"Extracted {len(sentences)} segments")
+                progress_tracker.update_step('translation', 30, f"Extracted {len(sentences)} Japanese sentences")
             
             return sentences
             
@@ -177,16 +212,21 @@ class AudioTranslator:
             
             audio = AudioSegment.from_file(audio_file)
             
-            # Calculate chunk duration (aim for ~20MB chunks, roughly 10-15 minutes depending on quality)
-            # This is conservative to stay well under the 26MB limit
-            chunk_duration_ms = 10 * 60 * 1000  # 10 minutes in milliseconds
+            # Calculate optimal chunk duration using utility function
+            total_duration_ms = len(audio)
+            chunk_duration_ms = self._get_safe_chunk_duration(audio_file, total_duration_ms)
+            
+            # Estimate chunk sizes for user feedback
+            original_file_size = audio_file.stat().st_size
+            bytes_per_ms = original_file_size / total_duration_ms
+            estimated_chunk_size_mb = self._estimate_chunk_size(chunk_duration_ms, bytes_per_ms)
             
             chunks = []
             total_duration = len(audio)
             num_chunks = (total_duration + chunk_duration_ms - 1) // chunk_duration_ms  # Ceiling division
             
             if progress_tracker:
-                progress_tracker.update_step('translation', 10, f"Splitting audio into {num_chunks} chunks")
+                progress_tracker.update_step('translation', 10, f"Splitting into {num_chunks} chunks (~{estimated_chunk_size_mb:.1f}MB each)")
             
             # Split audio into chunks
             for i in range(0, total_duration, chunk_duration_ms):
@@ -196,7 +236,7 @@ class AudioTranslator:
             
             all_sentences = []
             
-            # Process each chunk
+            # Process each chunk with size validation
             for chunk_idx, (chunk, chunk_start_time) in enumerate(chunks):
                 if progress_tracker:
                     chunk_progress = 15 + (chunk_idx / len(chunks)) * 70  # 15-85% for chunk processing
@@ -206,6 +246,73 @@ class AudioTranslator:
                 # Export chunk to temporary file
                 chunk_file = self.temp_dir / f"chunk_{chunk_idx}.wav"
                 chunk.export(chunk_file, format="wav")
+                
+                # Validate chunk size before sending to API
+                chunk_size = chunk_file.stat().st_size
+                chunk_size_mb = chunk_size / (1024 * 1024)
+                max_size_mb = 25  # Stay under 26MB limit
+                
+                if chunk_size > max_size_mb * 1024 * 1024:
+                    print(f"⚠️  Chunk {chunk_idx + 1} is {chunk_size_mb:.1f}MB (over {max_size_mb}MB limit)")
+                    
+                    # If chunk is still too large, split it further
+                    if chunk_size > 26 * 1024 * 1024:  # Over hard limit
+                        print(f"🔄 Re-splitting chunk {chunk_idx + 1} into smaller pieces...")
+                        
+                        # Split this chunk in half
+                        half_duration = len(chunk) // 2
+                        chunk1 = chunk[:half_duration]
+                        chunk2 = chunk[half_duration:]
+                        
+                        # Process first half
+                        chunk1_file = self.temp_dir / f"chunk_{chunk_idx}a.wav"
+                        chunk1.export(chunk1_file, format="wav")
+                        
+                        # Process second half
+                        chunk2_file = self.temp_dir / f"chunk_{chunk_idx}b.wav"
+                        chunk2.export(chunk2_file, format="wav")
+                        
+                        # Transcribe both halves
+                        for sub_chunk_idx, (sub_chunk_file, sub_start_offset) in enumerate([
+                            (chunk1_file, 0),
+                            (chunk2_file, half_duration / 1000.0)
+                        ]):
+                            try:
+                                with open(sub_chunk_file, "rb") as audio_chunk:
+                                    response = self.openai_client.audio.transcriptions.create(
+                                        model="whisper-1",
+                                        file=audio_chunk,
+                                        language="ja",
+                                        response_format="verbose_json",
+                                        timestamp_granularities=["segment"]
+                                    )
+                                
+                                # Process segments with adjusted timestamps
+                                for segment in response.segments:
+                                    try:
+                                        text = segment.text.strip()
+                                        start_time = segment.start + chunk_start_time + sub_start_offset
+                                        end_time = segment.end + chunk_start_time + sub_start_offset
+                                        
+                                        if text:
+                                            all_sentences.append({
+                                                "text": text,
+                                                "start_time": start_time,
+                                                "end_time": end_time
+                                            })
+                                    except (AttributeError, KeyError, TypeError):
+                                        continue
+                                        
+                            except Exception as e:
+                                print(f"⚠️  Failed to transcribe sub-chunk {chunk_idx + 1}{chr(97 + sub_chunk_idx)}: {e}")
+                            finally:
+                                if sub_chunk_file.exists():
+                                    sub_chunk_file.unlink()
+                        
+                        # Clean up main chunk file
+                        if chunk_file.exists():
+                            chunk_file.unlink()
+                        continue
                 
                 try:
                     # Transcribe this chunk
