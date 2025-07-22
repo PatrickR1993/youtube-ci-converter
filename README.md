@@ -16,8 +16,14 @@ A powerful CLI tool that downloads YouTube videos and creates bilingual audio wi
 
 ### 1. Run Setup Script
 ```bash
-python setup.py
+python main.py --setup
 ```
+
+This will:
+- Check system requirements (Python 3.6+, FFmpeg)
+- Install all Python dependencies
+- Create necessary directories
+- Test the installation
 
 ### 2. Install FFmpeg
 
@@ -31,55 +37,69 @@ python setup.py
 1. Visit [OpenAI API Keys](https://platform.openai.com/api-keys)
 2. Create a new API key
 3. Set environment variable (or, just add it as an argument, see below):
+
+   **Windows (PowerShell):**
+   ```powershell
+   $env:OPENAI_API_KEY="your_api_key_here"
+   ```
+   
+   **Windows (Command Prompt):**
+   ```cmd
+   set OPENAI_API_KEY=your_api_key_here
+   ```
+   
+   **macOS/Linux:**
    ```bash
    export OPENAI_API_KEY=your_api_key_here
    ```
+   
+   **Permanent Storage (recommended):**
+   - **Windows**: Add to system environment variables via Control Panel → System → Advanced → Environment Variables
+   - **macOS/Linux**: Add `export OPENAI_API_KEY=your_api_key_here` to your `~/.bashrc` or `~/.zshrc` file
 
 ## Basic Usage
 
 ### Download and Translate YouTube Video
 ```bash
-python youtube_ci_converter.py --url "https://youtu.be/VIDEO_ID"
+python main.py --url "https://youtu.be/VIDEO_ID"
 ```
 
 ### Process Existing MP3 File
 ```bash
-python youtube_ci_converter.py --file "your_podcast.mp3"
+python main.py --file "your_podcast.mp3"
 ```
 
 ### With API Key (if not set as environment variable)
 ```bash
-python youtube_ci_converter.py --url "https://youtu.be/VIDEO_ID" --openai-key YOUR_API_KEY
+python main.py --url "https://youtu.be/VIDEO_ID" --openai-key YOUR_API_KEY
 ```
 
 ## Advanced Options
 
 ### Custom Output Directory
 ```bash
-python youtube_ci_converter.py --url "https://youtu.be/VIDEO_ID" --output "/custom/path"
+python main.py --url "https://youtu.be/VIDEO_ID" --output "/custom/path"
 ```
 
 ### Direct Audio Translation
 Process MP3 files directly with the audio translator:
 ```bash
-python audio_translator.py --file podcast.mp3
+python main.py --file podcast.mp3
 ```
 
 ### All Options
 ```bash
-python youtube_ci_converter.py --help
-python audio_translator.py --help
+python main.py --help
 ```
 
 ## Output Structure
 
 ```
-downloads/
-├── Video_Title.mp3                    # Original download
-
 output/
-├── Video_Title_bilingual.mp3          # EN→JP→EN audio
-└── Video_Title_transcript.json        # Timing + translations
+└── Video_Title/                       # Video-specific folder
+    ├── Video_Title.mp3                # Original audio
+    ├── Video_Title_transcript.json    # Timing + translations
+    └── Video_Title_bilingual.mp3      # EN→JP→EN audio
 ```
 
 ## Text-to-Speech
@@ -96,11 +116,20 @@ Uses **OpenAI TTS** with natural "alloy" voice for human-like English speech qua
 
 **Permission errors**: Run from a directory with write permissions
 
-## Cost Estimates
+## Testing
 
-- **Whisper**: ~$0.006 per minute of audio
-- **GPT Translation**: ~$0.002 per 1K tokens  
-- **OpenAI TTS**: ~$15 per 1M characters
+The project includes a comprehensive test suite to ensure functionality and reliability.
+
+### Run All Tests
+```bash
+python main.py --test
+```
+
+### Quick Functional Test
+For a fast verification of core functionality:
+```bash
+python tests/quick_test.py
+```
 
 ## License
 

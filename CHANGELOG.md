@@ -5,7 +5,17 @@ All notable changes to YouTube Japanese Audio Translator will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] - 2025-01-21
+## [1.1.0] - 2025-01-22
+
+### Added
+- **Tests**: Run unittests with python main.py --test
+
+### Refactored
+- **Project Structure**: Moved scripts to modules in /src, interact through main.py
+
+---
+
+## [1.0.0] - 2025-07-21
 
 ### Added
 - **YouTube Download & Conversion**: Download YouTube videos and convert to MP3
@@ -64,6 +74,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Speed Enhancements**: Faster audio processing algorithms
 
 ### Developer Experience
-- **Unit Testing**: Comprehensive test suite
-- **Documentation**: API documentation and tutorials
 - **CI/CD Pipeline**: Automated testing and releases
