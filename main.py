@@ -24,8 +24,6 @@ import translator_interface
 
 def check_dependencies():
     """Check for required system dependencies."""
-    print("🎌 YouTube Japanese Audio Translator")
-    print("=" * 45)
     
     # Check for FFmpeg dependency
     try:
@@ -87,7 +85,7 @@ def process_youtube_url(args, output_dir, progress_tracker):
     url = args.url
     
     # Start progress tracking
-    progress_tracker.start("YouTube to MP3 + Translation")
+    progress_tracker.start("🎌 YouTube Japanese Audio Translator")
     
     # Download and convert
     downloaded_file, video_title, channel_name = youtube_downloader.download_youtube_video(url, output_dir, progress_tracker)

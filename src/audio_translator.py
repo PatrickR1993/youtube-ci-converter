@@ -255,59 +255,15 @@ class AudioTranslator:
                 if chunk_size > max_size_mb * 1024 * 1024:
                     print(f"⚠️  Chunk {chunk_idx + 1} is {chunk_size_mb:.1f}MB (over {max_size_mb}MB limit)")
                     
-                    # If chunk is still too large, split it further
+                    # If chunk is still too large, use recursive splitting
                     if chunk_size > 26 * 1024 * 1024:  # Over hard limit
-                        print(f"🔄 Re-splitting chunk {chunk_idx + 1} into smaller pieces...")
+                        print(f"🔄 Splitting chunk {chunk_idx + 1} recursively into smaller pieces...")
                         
-                        # Split this chunk in half
-                        half_duration = len(chunk) // 2
-                        chunk1 = chunk[:half_duration]
-                        chunk2 = chunk[half_duration:]
-                        
-                        # Process first half
-                        chunk1_file = self.temp_dir / f"chunk_{chunk_idx}a.wav"
-                        chunk1.export(chunk1_file, format="wav")
-                        
-                        # Process second half
-                        chunk2_file = self.temp_dir / f"chunk_{chunk_idx}b.wav"
-                        chunk2.export(chunk2_file, format="wav")
-                        
-                        # Transcribe both halves
-                        for sub_chunk_idx, (sub_chunk_file, sub_start_offset) in enumerate([
-                            (chunk1_file, 0),
-                            (chunk2_file, half_duration / 1000.0)
-                        ]):
-                            try:
-                                with open(sub_chunk_file, "rb") as audio_chunk:
-                                    response = self.openai_client.audio.transcriptions.create(
-                                        model="whisper-1",
-                                        file=audio_chunk,
-                                        language="ja",
-                                        response_format="verbose_json",
-                                        timestamp_granularities=["segment"]
-                                    )
-                                
-                                # Process segments with adjusted timestamps
-                                for segment in response.segments:
-                                    try:
-                                        text = segment.text.strip()
-                                        start_time = segment.start + chunk_start_time + sub_start_offset
-                                        end_time = segment.end + chunk_start_time + sub_start_offset
-                                        
-                                        if text:
-                                            all_sentences.append({
-                                                "text": text,
-                                                "start_time": start_time,
-                                                "end_time": end_time
-                                            })
-                                    except (AttributeError, KeyError, TypeError):
-                                        continue
-                                        
-                            except Exception as e:
-                                print(f"⚠️  Failed to transcribe sub-chunk {chunk_idx + 1}{chr(97 + sub_chunk_idx)}: {e}")
-                            finally:
-                                if sub_chunk_file.exists():
-                                    sub_chunk_file.unlink()
+                        # Use recursive splitting to handle extremely large chunks
+                        sub_sentences = self._split_and_transcribe_chunk(
+                            chunk, chunk_start_time, chunk_idx, max_size_bytes=25 * 1024 * 1024
+                        )
+                        all_sentences.extend(sub_sentences)
                         
                         # Clean up main chunk file
                         if chunk_file.exists():
@@ -379,6 +335,104 @@ class AudioTranslator:
             print(f"❌ Large audio transcription failed: {e}")
             return []
     
+    def _split_and_transcribe_chunk(self, chunk: AudioSegment, chunk_start_time: float, 
+                                  chunk_idx: int, max_size_bytes: int = 25 * 1024 * 1024,
+                                  recursion_depth: int = 0) -> List[Dict]:
+        """Recursively split and transcribe a chunk that's too large for the API.
+        
+        Args:
+            chunk: AudioSegment that needs to be split
+            chunk_start_time: Start time offset for this chunk in seconds
+            chunk_idx: Index of the parent chunk (for naming)
+            max_size_bytes: Maximum allowed size in bytes
+            recursion_depth: Current recursion depth (for safety)
+            
+        Returns:
+            List of transcribed sentences with correct timestamps
+        """
+        # Safety check to prevent infinite recursion
+        if recursion_depth > 5:
+            print(f"⚠️  Maximum recursion depth reached for chunk {chunk_idx}. Skipping...")
+            return []
+        
+        # Also check minimum chunk size - if chunk is too small, skip it
+        if len(chunk) < 1000:  # Less than 1 second
+            print(f"⚠️  Chunk {chunk_idx} too small ({len(chunk)}ms). Skipping...")
+            return []
+        
+        sentences = []
+        
+        # Export chunk to check its size
+        temp_file = self.temp_dir / f"temp_chunk_{chunk_idx}_check.wav"
+        chunk.export(temp_file, format="wav")
+        chunk_size = temp_file.stat().st_size
+        
+        if chunk_size <= max_size_bytes:
+            # Chunk is small enough, transcribe it
+            try:
+                with open(temp_file, "rb") as audio_chunk:
+                    response = self.openai_client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_chunk,
+                        language="ja",
+                        response_format="verbose_json",
+                        timestamp_granularities=["segment"]
+                    )
+                
+                # Process segments with adjusted timestamps
+                for segment in response.segments:
+                    try:
+                        text = segment.text.strip()
+                        start_time = segment.start + chunk_start_time
+                        end_time = segment.end + chunk_start_time
+                        
+                        if text:
+                            sentences.append({
+                                "text": text,
+                                "start_time": start_time,
+                                "end_time": end_time
+                            })
+                    except (AttributeError, KeyError, TypeError):
+                        continue
+                        
+            except Exception as e:
+                print(f"⚠️  Failed to transcribe chunk: {e}")
+            finally:
+                if temp_file.exists():
+                    temp_file.unlink()
+        else:
+            # Chunk is still too large, split it further
+            chunk_size_mb = chunk_size / (1024 * 1024)
+            print(f"   🔄 Chunk still {chunk_size_mb:.1f}MB, splitting further...")
+            
+            # Split into smaller pieces (aim for 4 pieces to be more aggressive)
+            quarter_duration = len(chunk) // 4
+            sub_chunks = [
+                (chunk[0:quarter_duration], 0),
+                (chunk[quarter_duration:2*quarter_duration], quarter_duration),
+                (chunk[2*quarter_duration:3*quarter_duration], 2*quarter_duration),
+                (chunk[3*quarter_duration:], 3*quarter_duration)
+            ]
+            
+            # Recursively process each sub-chunk
+            for i, (sub_chunk, offset_ms) in enumerate(sub_chunks):
+                if len(sub_chunk) > 0:  # Skip empty chunks
+                    offset_seconds = offset_ms / 1000.0
+                    sub_sentences = self._split_and_transcribe_chunk(
+                        sub_chunk, 
+                        chunk_start_time + offset_seconds, 
+                        f"{chunk_idx}_{i}",
+                        max_size_bytes,
+                        recursion_depth + 1
+                    )
+                    sentences.extend(sub_sentences)
+        
+        # Clean up temp file
+        if temp_file.exists():
+            temp_file.unlink()
+            
+        return sentences
+
     def translate_sentences(self, sentences: List[Dict], progress_tracker=None) -> List[Dict]:
         """Translate Japanese sentences to English.
         

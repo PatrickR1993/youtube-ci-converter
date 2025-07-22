@@ -8,7 +8,6 @@ A powerful CLI tool that downloads YouTube videos and creates bilingual audio wi
 - 🎌 **Japanese Speech Recognition**: OpenAI Whisper API for accurate transcription
 - 🌐 **AI Translation**: GPT models for natural English translations
 - � **Bilingual Audio**: EN→JP pattern with timing preservation
-- � **Progress Tracking**: Real-time progress bars for all operations
 - 🔊 **Natural Text-to-Speech**: OpenAI TTS for human-like English voice
 - 📄 **Transcript Export**: JSON output with timing and translations
 
