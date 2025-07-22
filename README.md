@@ -96,7 +96,7 @@ python main.py --help
 
 ```
 output/
-└── Video_Title/                       # Video-specific folder
+└── Youtube Channel/                   # Video-specific folder
     ├── Video_Title.mp3                # Original audio
     ├── Video_Title_transcript.json    # Timing + translations
     └── Video_Title_bilingual.mp3      # EN→JP→EN audio

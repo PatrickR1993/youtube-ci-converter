@@ -51,13 +51,18 @@ def process_existing_file(args, output_dir, progress_tracker):
         print(f"❌ File must be an MP3: {input_file}")
         sys.exit(1)
     
-    # For existing files, create a folder based on the filename
+    # For existing files, use "Local Files" as the channel name
+    channel_name = "Local Files"
     video_title = input_file.stem
+    sanitized_channel = utils.sanitize_filename(channel_name)
     sanitized_title = utils.sanitize_filename(video_title)
-    video_output_dir = output_dir / sanitized_title
-    video_output_dir.mkdir(exist_ok=True)
     
-    # Copy the file to the video output directory if it's not already there
+    # Create channel directory structure
+    channel_output_dir = output_dir / sanitized_channel
+    channel_output_dir.mkdir(exist_ok=True)
+    video_output_dir = channel_output_dir
+    
+    # Copy the file to the channel output directory if it's not already there
     if input_file.parent != video_output_dir:
         new_input_file = video_output_dir / input_file.name
         if not new_input_file.exists():
@@ -66,6 +71,7 @@ def process_existing_file(args, output_dir, progress_tracker):
         input_file = new_input_file
     
     print(f"📁 Processing: {input_file.name}")
+    print(f"📂 Channel folder: {channel_name}")
     progress_tracker.start("Processing audio file")
     progress_tracker.update_step('download', 100, "File ready")  # Skip download step
     
@@ -84,11 +90,13 @@ def process_youtube_url(args, output_dir, progress_tracker):
     progress_tracker.start("YouTube to MP3 + Translation")
     
     # Download and convert
-    downloaded_file, video_title = youtube_downloader.download_youtube_video(url, output_dir, progress_tracker)
+    downloaded_file, video_title, channel_name = youtube_downloader.download_youtube_video(url, output_dir, progress_tracker)
     
-    if downloaded_file and video_title:
+    if downloaded_file and video_title and channel_name:
         input_file = downloaded_file
-        video_output_dir = downloaded_file.parent  # This is already the video-specific directory
+        video_output_dir = downloaded_file.parent  # This is already the channel directory
+        print(f"📂 Channel: {channel_name}")
+        print(f"📁 Video: {video_title}")
         return input_file, video_title, video_output_dir
     else:
         progress_tracker.finish("❌ Download failed")
@@ -116,7 +124,7 @@ def run_translation(input_file, video_output_dir, progress_tracker, api_key):
         # Show output file information after progress bar completes
         transcript_file = video_output_dir / f"{input_file.stem}_transcript.json"
         print(f"\n🎉 Translation completed successfully!")
-        print(f"📁 Video folder: {video_output_dir}")
+        print(f"� Channel folder: {video_output_dir}")
         print(f"🎵 Original audio: {input_file}")
         print(f"📄 Transcript: {transcript_file}")
         print(f"🎵 Bilingual audio: {output_file}")
@@ -135,10 +143,12 @@ def main():
                "  python main.py --file podcast.mp3\n"
                "  python main.py --setup\n"
                "  python main.py --test\n\n"
-               "Output: Creates a folder in ./output/ named after the video title containing:\n"
-               "  - Original MP3 file\n"
-               "  - JSON transcript file\n"
-               "  - Bilingual MP3 file",
+               "Output: Creates a folder structure in ./output/:\n"
+               "  - output/[Channel Name]/\n"
+               "    - Original MP3 file\n"
+               "    - JSON transcript file\n"
+               "    - Bilingual MP3 file\n"
+               "  (Local files use 'Local Files' as channel name)",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(

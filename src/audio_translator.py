@@ -28,6 +28,18 @@ except ImportError as e:
     print("- macOS: brew install ffmpeg")
     sys.exit(1)
 
+# Import utility functions
+try:
+    from utils import sanitize_filename
+except ImportError:
+    # Fallback if utils module is not available
+    def sanitize_filename(filename):
+        """Fallback function to sanitize filenames."""
+        invalid_chars = '<>:"/\\|?*'
+        for char in invalid_chars:
+            filename = filename.replace(char, '_')
+        return filename.strip('. ')[:100]
+
 
 class AudioTranslator:
     """Main class for handling Japanese audio translation."""
@@ -557,7 +569,12 @@ def main():
     """Main function for the audio translator."""
     parser = argparse.ArgumentParser(
         description="Translate Japanese audio to English and create bilingual audio",
-        epilog="Example: python audio_translator.py --file podcast.mp3 --api-key your_openai_key"
+        epilog="Example: python audio_translator.py --file podcast.mp3 --api-key your_openai_key\n\n"
+               "Output: Creates files in ./output/Local Files/ containing:\n"
+               "  - Original MP3 file\n"
+               "  - JSON transcript file\n"
+               "  - Bilingual MP3 file",
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
         '--file', '-f',
@@ -622,21 +639,28 @@ def main():
             except ValueError:
                 print("Please enter a valid number")
     
-    # Set up output directory
+    # Set up output directory with channel structure
     if args.output_dir:
-        output_dir = Path(args.output_dir)
+        base_output_dir = Path(args.output_dir)
     else:
-        output_dir = Path("output")
+        base_output_dir = Path("output")
     
-    output_dir.mkdir(exist_ok=True)
+    base_output_dir.mkdir(exist_ok=True)
     
-    # Generate output filenames
+    # Create channel directory for standalone audio files
+    channel_name = "Local Files"
+    sanitized_channel = sanitize_filename(channel_name)
+    channel_output_dir = base_output_dir / sanitized_channel
+    channel_output_dir.mkdir(exist_ok=True)
+    
+    # Generate output filenames in channel directory
     base_name = input_file.stem
-    bilingual_file = output_dir / f"{base_name}_bilingual.mp3"
-    transcript_file = output_dir / f"{base_name}_transcript.json"
+    bilingual_file = channel_output_dir / f"{base_name}_bilingual.mp3"
+    transcript_file = channel_output_dir / f"{base_name}_transcript.json"
     
     print(f"\n🎯 Processing: {input_file.name}")
-    print(f"📤 Output directory: {output_dir}")
+    print(f"📂 Channel: {channel_name}")
+    print(f"📤 Output directory: {channel_output_dir}")
     
     try:
         # Step 1: Extract sentences with timing using Whisper
