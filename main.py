@@ -1,18 +1,7 @@
 #!/usr/bin/env python3
 """
 YouTube CI Converter - Main Entry Point
-A command-line tool to download YouTube videos and translate Japanese audio to English               "Examples:\n"
-               "  python main.py --url https://youtu.be/VIDEO_ID\n"
-               "  python main.py --file podcast.mp3\n"
-               "  python main.py --url https://youtu.be/VIDEO_ID --keep-transcript\n"
-               "  python main.py --setup\n"
-               "  python main.py --test\n\n"
-               "Output: Creates a folder structure in ./output/:\n"
-               "  - output/[Channel Name]/\n"
-               "    - YYYY-MM-DD_VideoTitle.mp3 (original audio)\n"
-               "    - YYYY-MM-DD_VideoTitle_bilingual.mp3\n"
-               "    - YYYY-MM-DD_VideoTitle_transcript.json (only with --keep-transcript)\n"
-               "  (Local files use 'Local Files' as channel name)",gual output.
+A command-line tool to download YouTube videos and translate Japanese audio to English with bilingual output.
 """
 
 import os
@@ -181,8 +170,8 @@ def main():
                "  python main.py --url https://youtu.be/VIDEO_ID --separate-files\n"
                "  python main.py --setup\n"
                "  python main.py --test\n\n"
-               "Output: Creates a folder structure in ./output/:\n"
-               "  - output/[Channel Name]/\n"
+               "Output: Creates a folder structure in ~/Downloads/YouTube CI Converter/:\n"
+               "  - YouTube CI Converter/[Channel Name]/\n"
                "    - YYYY-MM-DD_VideoTitle_complete.mp3 (default: bilingual + original)\n"
                "    - YYYY-MM-DD_VideoTitle.mp3 (original, only with --separate-files)\n"
                "    - YYYY-MM-DD_VideoTitle_bilingual.mp3 (only with --separate-files)\n"
@@ -200,7 +189,7 @@ def main():
     )
     parser.add_argument(
         '--output', '-o',
-        help='Output directory for processed files (default: ./output/)'
+        help='Output directory for processed files (default: ~/Downloads/YouTube CI Converter/)'
     )
     parser.add_argument(
         '--openai-key',

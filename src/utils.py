@@ -5,6 +5,7 @@ Contains common helper functions used across the application.
 """
 
 import re
+import os
 from pathlib import Path
 
 
@@ -57,15 +58,30 @@ def sanitize_filename(filename):
 def get_output_directory():
     """
     Get or create the output directory for processed files.
+    Uses the user's Downloads folder as the default location.
     
     Returns:
         Path: Path object for the output directory
     """
-    # Create output directory in the same folder as the main script
-    script_dir = Path(__file__).parent.parent  # Go up from src/ to root
-    output_dir = script_dir / "output"
-    output_dir.mkdir(exist_ok=True)
-    return output_dir
+    # Try to get the user's Downloads folder
+    try:
+        # On Windows, get the Downloads folder from the user profile
+        if os.name == 'nt':  # Windows
+            downloads_dir = Path.home() / "Downloads"
+        else:  # macOS/Linux
+            downloads_dir = Path.home() / "Downloads"
+        
+        # Create the YouTube CI Converter folder within Downloads
+        output_dir = downloads_dir / "YouTube CI Converter"
+        output_dir.mkdir(exist_ok=True)
+        return output_dir
+        
+    except Exception:
+        # Fallback to the original behavior if Downloads folder is not accessible
+        script_dir = Path(__file__).parent.parent  # Go up from src/ to root
+        output_dir = script_dir / "output"
+        output_dir.mkdir(exist_ok=True)
+        return output_dir
 
 
 def prompt_for_url():
