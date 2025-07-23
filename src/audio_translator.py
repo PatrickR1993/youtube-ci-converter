@@ -796,7 +796,7 @@ def main():
     
     args = parser.parse_args()
     
-    print("🎌 Japanese Audio Translator")
+    print("🎌 YouTube CI Converter")
     print("=" * 50)
     
     # Get OpenAI API key (required)

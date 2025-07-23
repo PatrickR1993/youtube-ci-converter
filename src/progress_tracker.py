@@ -8,7 +8,7 @@ import time
 
 
 class UnifiedProgressTracker:
-    """Simple notification system for the entire YouTube to MP3 + Translation operation."""
+    """Simple notification system for the entire YouTube CI Converter operation."""
     
     def __init__(self):
         self.start_time = None

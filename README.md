@@ -1,5 +1,4 @@
-# YouTube J- 🔗 **Smart Audio Combination**: Bilingual audio + original audio in one file by default
-- 🧹 **Clean Output**: Original files automatically removed when combined (use --separate-files to keep)panese Audio Translator
+# YouTube CI Converter
 
 A powerful CLI tool that downloads YouTube videos and creates bilingual audio with English translations spoken before each Japanese sentence.
 
@@ -78,6 +77,7 @@ python main.py --url "https://youtu.be/VIDEO_ID" --openai-key YOUR_API_KEY
 ## Advanced Options
 
 ### Custom Output Directory
+By default, files are saved to `~/Downloads/YouTube CI Converter/`. To use a custom directory:
 ```bash
 python main.py --url "https://youtu.be/VIDEO_ID" --output "/custom/path"
 ```
@@ -108,7 +108,7 @@ python main.py --help
 ## Output Structure
 
 ```
-output/
+~/Downloads/YouTube CI Converter/
 └── Youtube Channel/                                # Channel-specific folder
     ├── 2024-03-15 - Video_Title_complete.mp3       # Combined: bilingual + original (default)
     ├── 2024-03-15 - Video_Title.mp3                # Original audio (only with --separate-files)
