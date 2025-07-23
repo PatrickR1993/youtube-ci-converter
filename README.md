@@ -1,5 +1,4 @@
-# YouTube J- 🔗 **Smart Audio Combination**: Bilingual audio + original audio in one file by default
-- 🧹 **Clean Output**: Original files automatically removed when combined (use --separate-files to keep)panese Audio Translator
+# YouTube CI Converter
 
 A powerful CLI tool that downloads YouTube videos and creates bilingual audio with English translations spoken before each Japanese sentence.
 

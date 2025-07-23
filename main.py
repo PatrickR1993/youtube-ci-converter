@@ -96,7 +96,7 @@ def process_youtube_url(args, output_dir, progress_tracker):
     url = args.url
     
     # Start progress tracking
-    progress_tracker.start("🎌 YouTube Japanese Audio Translator")
+    progress_tracker.start("🎌 YouTube CI Converter")
     
     # Download and convert
     downloaded_file, video_title, channel_name = youtube_downloader.download_youtube_video(url, output_dir, progress_tracker)
@@ -173,7 +173,7 @@ def run_translation(input_file, video_output_dir, progress_tracker, api_key, kee
 def main():
     """Main function to run the CLI tool."""
     parser = argparse.ArgumentParser(
-        description="Download YouTube videos and translate Japanese audio to English with bilingual output",
+        description="YouTube CI Converter - Download YouTube videos and translate Japanese audio to English with bilingual output",
         epilog="Examples:\n"
                "  python main.py --url https://youtu.be/VIDEO_ID\n"
                "  python main.py --file podcast.mp3\n"

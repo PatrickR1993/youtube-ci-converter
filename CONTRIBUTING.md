@@ -1,4 +1,4 @@
-# Contributing to YouTube Japanese Audio Translator
+# Contributing to YouTube CI Converter
 
 Thank you for your interest in contributing! This project helps users download YouTube videos and translate Japanese audio content with bilingual output.
 
