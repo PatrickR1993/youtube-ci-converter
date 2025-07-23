@@ -102,8 +102,12 @@ def process_youtube_url(args, output_dir, progress_tracker):
         sys.exit(1)
 
 
-def run_translation(input_file, video_output_dir, progress_tracker, api_key, keep_transcript=False, separate_files=False):
-    """Run the translation process."""
+def run_translation(input_file, video_output_dir, progress_tracker, api_key, keep_transcript=False, separate_files=False, use_parallel=True):
+    """Run the translation process with optional parallel processing.
+    
+    Args:
+        use_parallel: If True, uses parallel processing for faster translation and TTS generation
+    """
     # Get the AudioTranslator class
     AudioTranslator = translator_interface.get_audio_translator_class()
     if not AudioTranslator:
@@ -113,8 +117,10 @@ def run_translation(input_file, video_output_dir, progress_tracker, api_key, kee
     # Initialize translator
     translator = AudioTranslator(api_key)
     
-    # Run translation with progress tracking
-    output_file = translator_interface.run_translation_with_progress(translator, input_file, video_output_dir, progress_tracker, separate_files)
+    # Run translation with progress tracking (now with parallel processing option)
+    output_file = translator_interface.run_translation_with_progress(
+        translator, input_file, video_output_dir, progress_tracker, separate_files, use_parallel
+    )
     
     if output_file:
         progress_tracker.finish("✅ Complete")
@@ -168,8 +174,11 @@ def main():
                "  python main.py --file podcast.mp3\n"
                "  python main.py --url https://youtu.be/VIDEO_ID --keep-transcript\n"
                "  python main.py --url https://youtu.be/VIDEO_ID --separate-files\n"
+               "  python main.py --url https://youtu.be/VIDEO_ID --no-parallel  # Slower but more compatible\n"
                "  python main.py --setup\n"
                "  python main.py --test\n\n"
+               "Performance: Uses parallel processing by default for faster translation and TTS generation.\n"
+               "Use --no-parallel if you experience API rate limiting or compatibility issues.\n\n"
                "Output: Creates a folder structure in ~/Downloads/YouTube CI Converter/:\n"
                "  - YouTube CI Converter/[Channel Name]/\n"
                "    - YYYY-MM-DD_VideoTitle_complete.mp3 (default: bilingual + original)\n"
@@ -214,6 +223,11 @@ def main():
         '--separate-files',
         action='store_true',
         help='Keep bilingual and original audio as separate files (default: combined into one file)'
+    )
+    parser.add_argument(
+        '--no-parallel',
+        action='store_true',
+        help='Disable parallel processing for translation and TTS (slower but more compatible)'
     )
     
     args = parser.parse_args()
@@ -265,8 +279,9 @@ def main():
             print("❌ OpenAI API key required. Set OPENAI_API_KEY env var or use --openai-key")
             sys.exit(1)
         
-        # Run translation
-        success = run_translation(input_file, video_output_dir, tracker, api_key, args.keep_transcript, args.separate_files)
+        # Run translation with parallel processing option
+        use_parallel = not args.no_parallel  # Default to parallel unless --no-parallel is specified
+        success = run_translation(input_file, video_output_dir, tracker, api_key, args.keep_transcript, args.separate_files, use_parallel)
         
         if not success:
             sys.exit(1)

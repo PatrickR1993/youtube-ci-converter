@@ -8,6 +8,8 @@ import os
 import sys
 import json
 import time
+import asyncio
+import concurrent.futures
 from pathlib import Path
 from typing import List, Dict, Tuple
 import argparse
@@ -82,13 +84,13 @@ class AudioTranslator:
         original_file_size = audio_file.stat().st_size
         bytes_per_ms = original_file_size / audio_duration_ms
         
-        # Target 18MB per chunk to stay well under 26MB limit
-        target_chunk_size = 18 * 1024 * 1024
+        # Target 6MB per chunk to stay well under 26MB limit (more aggressive initial chunking)
+        target_chunk_size = 6 * 1024 * 1024
         optimal_chunk_duration_ms = int(target_chunk_size / bytes_per_ms)
         
-        # Ensure chunks are between 3-6 minutes for safety and efficiency
-        min_chunk_duration = 3 * 60 * 1000   # 3 minutes
-        max_chunk_duration = 6 * 60 * 1000   # 6 minutes
+        # Ensure chunks are between 2-4 minutes for aggressive but safe chunking
+        min_chunk_duration = 2 * 60 * 1000   # 2 minutes (smaller minimum)
+        max_chunk_duration = 4 * 60 * 1000   # 4 minutes (smaller maximum)
         
         return max(min_chunk_duration, min(optimal_chunk_duration_ms, max_chunk_duration))
         
@@ -405,13 +407,11 @@ class AudioTranslator:
             chunk_size_mb = chunk_size / (1024 * 1024)
             print(f"   🔄 Chunk still {chunk_size_mb:.1f}MB, splitting further...")
             
-            # Split into smaller pieces (aim for 4 pieces to be more aggressive)
-            quarter_duration = len(chunk) // 4
+            # Split into 2 pieces only (less aggressive secondary chunking)
+            half_duration = len(chunk) // 2
             sub_chunks = [
-                (chunk[0:quarter_duration], 0),
-                (chunk[quarter_duration:2*quarter_duration], quarter_duration),
-                (chunk[2*quarter_duration:3*quarter_duration], 2*quarter_duration),
-                (chunk[3*quarter_duration:], 3*quarter_duration)
+                (chunk[0:half_duration], 0),
+                (chunk[half_duration:], half_duration)
             ]
             
             # Recursively process each sub-chunk
@@ -488,6 +488,145 @@ class AudioTranslator:
                 sentence["english"] = f"[Translation failed: {japanese_text}]"
         
         return sentences
+    
+    def translate_single_sentence(self, sentence_data: Tuple[int, Dict]) -> Tuple[int, Dict]:
+        """Translate a single sentence - designed for parallel execution.
+        
+        Args:
+            sentence_data: Tuple of (index, sentence_dict)
+            
+        Returns:
+            Tuple of (index, updated_sentence_dict)
+        """
+        i, sentence = sentence_data
+        japanese_text = sentence["text"]
+        
+        try:
+            if self.openai_client:
+                # Use GPT for high-quality translation
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {
+                            "role": "system", 
+                            "content": "You are a professional Japanese to English translator. Translate the following Japanese text to natural, fluent English. Preserve the meaning and tone. Only return the translation, no explanations."
+                        },
+                        {
+                            "role": "user", 
+                            "content": japanese_text
+                        }
+                    ],
+                    max_tokens=200,
+                    temperature=0.3
+                )
+                english_text = response.choices[0].message.content.strip()
+            else:
+                # Fallback: Use a simple translation service or placeholder
+                english_text = f"[Translation of: {japanese_text[:50]}...]"
+            
+            sentence["english"] = english_text
+            return i, sentence
+            
+        except Exception as e:
+            print(f"⚠️  Translation failed for sentence {i+1}: {e}")
+            sentence["english"] = f"[Translation failed: {japanese_text}]"
+            return i, sentence
+    
+    def translate_sentences_parallel(self, sentences: List[Dict], progress_tracker=None, max_workers: int = 5) -> List[Dict]:
+        """Translate all sentences in parallel for much faster processing.
+        
+        Args:
+            sentences: List of sentence dictionaries
+            progress_tracker: Optional UnifiedProgressTracker for progress updates
+            max_workers: Maximum number of concurrent translation requests
+            
+        Returns:
+            List of sentences with English translations added
+        """
+        total_sentences = len(sentences)
+        
+        # Prepare data for parallel processing
+        sentence_data = [(i, sentence.copy()) for i, sentence in enumerate(sentences)]
+        
+        if progress_tracker:
+            progress_tracker.update_step('translation', 30, f"Starting parallel translation of {total_sentences} sentences")
+        
+        # Use ThreadPoolExecutor for parallel API calls
+        translated_results = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all translation tasks
+            future_to_index = {
+                executor.submit(self.translate_single_sentence, data): data[0] 
+                for data in sentence_data
+            }
+            
+            # Process completed translations
+            completed = 0
+            for future in concurrent.futures.as_completed(future_to_index):
+                try:
+                    index, translated_sentence = future.result()
+                    translated_results[index] = translated_sentence
+                    completed += 1
+                    
+                    # Update progress
+                    if progress_tracker:
+                        translation_progress = 30 + (completed / total_sentences) * 70
+                        progress_tracker.update_step('translation', translation_progress, f"Translated {completed}/{total_sentences}")
+                        
+                except Exception as e:
+                    index = future_to_index[future]
+                    print(f"⚠️  Translation failed for sentence {index+1}: {e}")
+                    # Keep original sentence with failed translation marker
+                    translated_results[index] = sentences[index].copy()
+                    translated_results[index]["english"] = f"[Translation failed: {sentences[index]['text']}]"
+                    completed += 1
+        
+        # Rebuild sentences list in original order
+        result_sentences = []
+        for i in range(total_sentences):
+            if i in translated_results:
+                result_sentences.append(translated_results[i])
+            else:
+                # Fallback for any missing translations
+                fallback = sentences[i].copy()
+                fallback["english"] = f"[Translation missing: {sentences[i]['text']}]"
+                result_sentences.append(fallback)
+        
+        return result_sentences
+    
+    def generate_english_audio_for_sentence(self, sentence_data: Tuple[int, str, Path]) -> Tuple[int, bool, Path]:
+        """Generate English audio for a single sentence - designed for parallel execution.
+        
+        Args:
+            sentence_data: Tuple of (index, english_text, output_file_path)
+            
+        Returns:
+            Tuple of (index, success_bool, output_file_path)
+        """
+        i, text, output_file = sentence_data
+        
+        try:
+            if self.openai_client:
+                # Generate speech using OpenAI TTS
+                response = self.openai_client.audio.speech.create(
+                    model="tts-1",
+                    voice="alloy",
+                    input=text,
+                    response_format="mp3"
+                )
+                
+                # Save audio to file
+                with open(output_file, 'wb') as f:
+                    f.write(response.content)
+                
+                return i, True, output_file
+            else:
+                print(f"⚠️  No OpenAI client available for TTS")
+                return i, False, output_file
+                
+        except Exception as e:
+            print(f"⚠️  TTS generation failed for sentence {i+1}: {e}")
+            return i, False, output_file
     
     def generate_english_audio(self, text: str, output_file: Path) -> bool:
         """Generate English speech audio from text using OpenAI TTS.
@@ -596,27 +735,68 @@ class AudioTranslator:
                     pass
     
     def create_bilingual_audio_with_progress(self, original_audio: Path, sentences: List[Dict], output_dir: Path, progress_tracker, separate_files: bool = False) -> Path:
-        """Create bilingual audio with progress tracking integration.
+        """Create bilingual audio with progress tracking integration and parallel TTS generation.
         
         Args:
             original_audio: Path to original Japanese audio
             sentences: List of translated sentences with timing
             output_dir: Directory to save the bilingual audio
             progress_tracker: UnifiedProgressTracker instance
+            separate_files: Whether to keep files separate or create combined version
             
         Returns:
             Path to output file if successful, None otherwise
         """
         try:
-            # Create output filename
-            output_file = output_dir / f"{original_audio.stem}_bilingual.mp3"
-            
             # Load original audio
             original = AudioSegment.from_file(str(original_audio))
-            bilingual_audio = AudioSegment.empty()
-            
-            last_end_time = 0
             total_segments = len(sentences)
+            
+            # Step 1: Generate all English audio files in parallel
+            progress_tracker.update_step('audio_gen', 10, f"Generating {total_segments} English audio files in parallel")
+            
+            # Prepare data for parallel TTS generation
+            tts_data = []
+            english_files = {}
+            for i, sentence in enumerate(sentences):
+                english_file = self.temp_dir / f"english_{i}.mp3"
+                english_files[i] = english_file
+                tts_data.append((i, sentence["english"], english_file))
+            
+            # Generate all English audio in parallel (much faster!)
+            tts_results = {}
+            max_tts_workers = 8  # TTS can handle more concurrent requests than translation
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_tts_workers) as executor:
+                # Submit all TTS tasks
+                future_to_index = {
+                    executor.submit(self.generate_english_audio_for_sentence, data): data[0] 
+                    for data in tts_data
+                }
+                
+                # Process completed TTS generations
+                completed_tts = 0
+                for future in concurrent.futures.as_completed(future_to_index):
+                    try:
+                        index, success, file_path = future.result()
+                        tts_results[index] = success
+                        completed_tts += 1
+                        
+                        # Update progress (10-60% for TTS generation)
+                        tts_progress = 10 + (completed_tts / total_segments) * 50
+                        progress_tracker.update_step('audio_gen', tts_progress, f"Generated TTS {completed_tts}/{total_segments}")
+                        
+                    except Exception as e:
+                        index = future_to_index[future]
+                        print(f"⚠️  TTS generation failed for sentence {index+1}: {e}")
+                        tts_results[index] = False
+                        completed_tts += 1
+            
+            # Step 2: Assemble the final bilingual audio
+            progress_tracker.update_step('audio_gen', 60, "Assembling bilingual audio from generated segments")
+            
+            bilingual_audio = AudioSegment.empty()
+            last_end_time = 0
             
             for i, sentence in enumerate(sentences):
                 start_ms = int(sentence["start_time"] * 1000)
@@ -627,19 +807,15 @@ class AudioTranslator:
                     gap = original[last_end_time:start_ms]
                     bilingual_audio += gap
                 
-                # Generate English audio
-                english_file = self.temp_dir / f"english_{i}.mp3"
-                if self.generate_english_audio(sentence["english"], english_file):
-                    english_audio = AudioSegment.from_file(str(english_file))
-                    
-                    # Add English translation
-                    bilingual_audio += english_audio
-                    
-                    # Add small pause
-                    bilingual_audio += AudioSegment.silent(duration=300)  # 300ms pause
-                    
-                    # Clean up temp file
-                    english_file.unlink()
+                # Add English audio (if generation was successful)
+                if tts_results.get(i, False) and english_files[i].exists():
+                    try:
+                        english_audio = AudioSegment.from_file(str(english_files[i]))
+                        bilingual_audio += english_audio
+                        bilingual_audio += AudioSegment.silent(duration=300)  # 300ms pause
+                    except Exception as e:
+                        print(f"⚠️  Could not load English audio for sentence {i+1}: {e}")
+                        # Continue without English audio for this segment
                 
                 # Add original Japanese segment
                 japanese_segment = original[start_ms:end_ms]
@@ -650,13 +826,26 @@ class AudioTranslator:
                 
                 last_end_time = end_ms
                 
-                # Update progress
-                segment_progress = ((i + 1) / total_segments) * 100
-                progress_tracker.update_step('audio_gen', segment_progress, f"Generating segment {i+1}/{total_segments}")
+                # Update assembly progress (60-90%)
+                assembly_progress = 60 + ((i + 1) / total_segments) * 30
+                progress_tracker.update_step('audio_gen', assembly_progress, f"Assembling segment {i+1}/{total_segments}")
             
             # Add any remaining audio
             if last_end_time < len(original):
                 remaining = original[last_end_time:]
+                bilingual_audio += remaining
+            
+            # Export bilingual audio
+            bilingual_file = output_dir / f"{original_audio.stem}_bilingual.mp3"
+            bilingual_audio.export(str(bilingual_file), format="mp3")
+            
+            # Clean up temporary English audio files
+            for english_file in english_files.values():
+                try:
+                    if english_file.exists():
+                        english_file.unlink()
+                except:
+                    pass
                 bilingual_audio += remaining
             
             # Export bilingual audio
