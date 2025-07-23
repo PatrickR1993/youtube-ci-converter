@@ -6,7 +6,6 @@ Handles downloading and converting YouTube videos to MP3 format.
 
 import sys
 import time
-import threading
 from pathlib import Path
 
 try:
@@ -20,22 +19,6 @@ from progress_tracker import DownloadProgressHook
 from utils import sanitize_filename
 
 
-def simulate_conversion_progress(progress_hook, stop_event):
-    """Simulate conversion progress while the actual conversion is happening."""
-    if not progress_hook or not progress_hook.conversion_started:
-        return
-    
-    # Simulate gradual progress from 80% to 95% over conversion time
-    current_progress = 80
-    increment = 1
-    
-    while not stop_event.is_set() and current_progress < 95:
-        time.sleep(0.5)  # Update every 0.5 seconds
-        current_progress += increment
-        if progress_hook.progress_tracker:
-            progress_hook.progress_tracker.update_step('download', current_progress, "Converting to MP3...")
-
-
 def download_youtube_video(url, output_dir, progress_tracker=None):
     """
     Download YouTube video and convert to MP3.
@@ -46,10 +29,10 @@ def download_youtube_video(url, output_dir, progress_tracker=None):
         progress_tracker (UnifiedProgressTracker): Progress tracker instance
         
     Returns:
-        tuple: (Path to downloaded MP3 file, video title) if successful, (None, None) otherwise
+        tuple: (Path to downloaded MP3 file, video title, channel name) if successful, (None, None, None) otherwise
     """
     try:
-        # First, extract video info to get the title
+        # First, extract video info to get the title and channel
         info_opts = {
             'quiet': True,
             'no_warnings': True,
@@ -58,13 +41,29 @@ def download_youtube_video(url, output_dir, progress_tracker=None):
         with yt_dlp.YoutubeDL(info_opts) as ydl:
             video_info = ydl.extract_info(url, download=False)
             video_title = video_info.get('title', 'Unknown Video')
+            channel_name = video_info.get('uploader', video_info.get('channel', 'Unknown Channel'))
+            
+            # Extract upload date and format it as YYYY-MM-DD
+            upload_date = video_info.get('upload_date')  # Format: YYYYMMDD
+            if upload_date:
+                # Convert YYYYMMDD to YYYY-MM-DD
+                formatted_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:8]}"
+            else:
+                formatted_date = "Unknown-Date"
         
-        # Sanitize the video title for use as folder name
+        # Sanitize the channel name and video title for use as folder names
+        sanitized_channel = sanitize_filename(channel_name)
         sanitized_title = sanitize_filename(video_title)
         
-        # Create video-specific directory
-        video_output_dir = output_dir / sanitized_title
-        video_output_dir.mkdir(exist_ok=True)
+        # Create filename with upload date prefix: YYYY-MM-DD_VideoTitle
+        filename_with_date = f"{formatted_date} - {sanitized_title}"
+        
+        # Create channel directory structure: output/channel_name/
+        channel_output_dir = output_dir / sanitized_channel
+        channel_output_dir.mkdir(exist_ok=True)
+        
+        # Files go directly in the channel folder
+        video_output_dir = channel_output_dir
         
         # Get file count before download to identify the new file
         existing_files = set(video_output_dir.glob("*.mp3"))
@@ -82,7 +81,7 @@ def download_youtube_video(url, output_dir, progress_tracker=None):
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
-            'outtmpl': str(video_output_dir / '%(title)s.%(ext)s'),
+            'outtmpl': str(video_output_dir / f'{filename_with_date}.%(ext)s'),
             'noplaylist': True,  # Only download single video, not playlist
             'quiet': True,       # Minimize yt-dlp output
         }
@@ -91,59 +90,44 @@ def download_youtube_video(url, output_dir, progress_tracker=None):
         if progress_hook:
             ydl_opts['progress_hooks'] = [progress_hook]
         
-        # Set up conversion progress simulation
-        stop_conversion_simulation = threading.Event()
-        conversion_thread = None
-        
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Download and convert
-                ydl.download([url])
-                
-                # Start conversion progress simulation after download
-                if progress_hook and progress_hook.conversion_started:
-                    conversion_thread = threading.Thread(
-                        target=simulate_conversion_progress, 
-                        args=(progress_hook, stop_conversion_simulation)
-                    )
-                    conversion_thread.daemon = True
-                    conversion_thread.start()
-                    
-                    # Give conversion some time to complete
-                    time.sleep(1.0)
-        
-        finally:
-            # Stop conversion simulation
-            stop_conversion_simulation.set()
-            if conversion_thread and conversion_thread.is_alive():
-                conversion_thread.join(timeout=1.0)
+        # Simple download without complex threading
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # Download and convert
+            ydl.download([url])
         
         # Mark conversion as complete
         if progress_hook:
             progress_hook.finish_conversion()
         
-        # Find the new file that was created
-        current_files = set(video_output_dir.glob("*.mp3"))
-        new_files = current_files - existing_files
+        # Find the new file that was created (should match our expected filename)
+        expected_filename = f"{filename_with_date}.mp3"
+        expected_filepath = video_output_dir / expected_filename
         
-        if new_files:
-            # Return the newly created file and video title
-            return list(new_files)[0], video_title
+        if expected_filepath.exists():
+            # Return the newly created file with upload date prefix
+            return expected_filepath, video_title, channel_name
         else:
-            # Fallback: use the most recently created file
-            mp3_files = list(video_output_dir.glob("*.mp3"))
-            if mp3_files:
-                return max(mp3_files, key=lambda f: f.stat().st_ctime), video_title
+            # Fallback: find any new MP3 files
+            current_files = set(video_output_dir.glob("*.mp3"))
+            new_files = current_files - existing_files
+            
+            if new_files:
+                return list(new_files)[0], video_title, channel_name
             else:
-                return None, None
+                # Final fallback: use the most recently created file
+                mp3_files = list(video_output_dir.glob("*.mp3"))
+                if mp3_files:
+                    return max(mp3_files, key=lambda f: f.stat().st_ctime), video_title, channel_name
+                else:
+                    return None, None, None
         
     except yt_dlp.DownloadError as e:
         if progress_tracker:
             progress_tracker.finish("Download failed")
         print(f"❌ Download error: {e}")
-        return None, None
+        return None, None, None
     except Exception as e:
         if progress_tracker:
             progress_tracker.finish("Download failed")
         print(f"❌ Unexpected error: {e}")
-        return None, None
+        return None, None, None

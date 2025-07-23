@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
 """
 YouTube CI Converter - Main Entry Point
-A command-line tool to download YouTube videos and translate Japanese audio to English with bilingual output.
+A command-line tool to download YouTube videos and translate Japanese audio to English               "Examples:\n"
+               "  python main.py --url https://youtu.be/VIDEO_ID\n"
+               "  python main.py --file podcast.mp3\n"
+               "  python main.py --url https://youtu.be/VIDEO_ID --keep-transcript\n"
+               "  python main.py --setup\n"
+               "  python main.py --test\n\n"
+               "Output: Creates a folder structure in ./output/:\n"
+               "  - output/[Channel Name]/\n"
+               "    - YYYY-MM-DD_VideoTitle.mp3 (original audio)\n"
+               "    - YYYY-MM-DD_VideoTitle_bilingual.mp3\n"
+               "    - YYYY-MM-DD_VideoTitle_transcript.json (only with --keep-transcript)\n"
+               "  (Local files use 'Local Files' as channel name)",gual output.
 """
 
 import os
@@ -24,8 +35,6 @@ import translator_interface
 
 def check_dependencies():
     """Check for required system dependencies."""
-    print("🎌 YouTube Japanese Audio Translator")
-    print("=" * 45)
     
     # Check for FFmpeg dependency
     try:
@@ -51,13 +60,18 @@ def process_existing_file(args, output_dir, progress_tracker):
         print(f"❌ File must be an MP3: {input_file}")
         sys.exit(1)
     
-    # For existing files, create a folder based on the filename
+    # For existing files, use "Local Files" as the channel name
+    channel_name = "Local Files"
     video_title = input_file.stem
+    sanitized_channel = utils.sanitize_filename(channel_name)
     sanitized_title = utils.sanitize_filename(video_title)
-    video_output_dir = output_dir / sanitized_title
-    video_output_dir.mkdir(exist_ok=True)
     
-    # Copy the file to the video output directory if it's not already there
+    # Create channel directory structure
+    channel_output_dir = output_dir / sanitized_channel
+    channel_output_dir.mkdir(exist_ok=True)
+    video_output_dir = channel_output_dir
+    
+    # Copy the file to the channel output directory if it's not already there
     if input_file.parent != video_output_dir:
         new_input_file = video_output_dir / input_file.name
         if not new_input_file.exists():
@@ -66,6 +80,7 @@ def process_existing_file(args, output_dir, progress_tracker):
         input_file = new_input_file
     
     print(f"📁 Processing: {input_file.name}")
+    print(f"📂 Channel folder: {channel_name}")
     progress_tracker.start("Processing audio file")
     progress_tracker.update_step('download', 100, "File ready")  # Skip download step
     
@@ -81,14 +96,16 @@ def process_youtube_url(args, output_dir, progress_tracker):
     url = args.url
     
     # Start progress tracking
-    progress_tracker.start("YouTube to MP3 + Translation")
+    progress_tracker.start("🎌 YouTube Japanese Audio Translator")
     
     # Download and convert
-    downloaded_file, video_title = youtube_downloader.download_youtube_video(url, output_dir, progress_tracker)
+    downloaded_file, video_title, channel_name = youtube_downloader.download_youtube_video(url, output_dir, progress_tracker)
     
-    if downloaded_file and video_title:
+    if downloaded_file and video_title and channel_name:
         input_file = downloaded_file
-        video_output_dir = downloaded_file.parent  # This is already the video-specific directory
+        video_output_dir = downloaded_file.parent  # This is already the channel directory
+        print(f"📂 Channel: {channel_name}")
+        print(f"📁 Video: {video_title}")
         return input_file, video_title, video_output_dir
     else:
         progress_tracker.finish("❌ Download failed")
@@ -96,7 +113,7 @@ def process_youtube_url(args, output_dir, progress_tracker):
         sys.exit(1)
 
 
-def run_translation(input_file, video_output_dir, progress_tracker, api_key):
+def run_translation(input_file, video_output_dir, progress_tracker, api_key, keep_transcript=False, separate_files=False):
     """Run the translation process."""
     # Get the AudioTranslator class
     AudioTranslator = translator_interface.get_audio_translator_class()
@@ -108,18 +125,45 @@ def run_translation(input_file, video_output_dir, progress_tracker, api_key):
     translator = AudioTranslator(api_key)
     
     # Run translation with progress tracking
-    output_file = translator_interface.run_translation_with_progress(translator, input_file, video_output_dir, progress_tracker)
+    output_file = translator_interface.run_translation_with_progress(translator, input_file, video_output_dir, progress_tracker, separate_files)
     
     if output_file:
         progress_tracker.finish("✅ Complete")
         
-        # Show output file information after progress bar completes
+        # Handle transcript file
         transcript_file = video_output_dir / f"{input_file.stem}_transcript.json"
-        print(f"\n🎉 Translation completed successfully!")
-        print(f"📁 Video folder: {video_output_dir}")
-        print(f"🎵 Original audio: {input_file}")
-        print(f"📄 Transcript: {transcript_file}")
-        print(f"🎵 Bilingual audio: {output_file}")
+        
+        if keep_transcript:
+            # Show output file information including transcript
+            print(f"\n🎉 Translation completed successfully!")
+            print(f"📂 Channel folder: {video_output_dir}")
+            if separate_files:
+                print(f"🎵 Original audio: {input_file}")
+                print(f"🎵 Bilingual audio: {output_file}")
+            else:
+                print(f"🎵 Complete audio: {output_file} (bilingual + original combined)")
+            print(f"📄 Transcript: {transcript_file}")
+        else:
+            # Remove transcript file and don't mention it in output
+            if transcript_file.exists():
+                transcript_file.unlink()
+                print(f"\n🎉 Translation completed successfully!")
+                print(f"📂 Channel folder: {video_output_dir}")
+                if separate_files:
+                    print(f"🎵 Original audio: {input_file}")
+                    print(f"🎵 Bilingual audio: {output_file}")
+                else:
+                    print(f"🎵 Complete audio: {output_file} (bilingual + original combined)")
+                print("📄 Transcript file removed (use --keep-transcript to retain)")
+            else:
+                print(f"\n🎉 Translation completed successfully!")
+                print(f"📂 Channel folder: {video_output_dir}")
+                if separate_files:
+                    print(f"🎵 Original audio: {input_file}")
+                    print(f"🎵 Bilingual audio: {output_file}")
+                else:
+                    print(f"🎵 Complete audio: {output_file} (bilingual + original combined)")
+        
         return True
     else:
         progress_tracker.finish("❌ Translation failed")
@@ -133,12 +177,17 @@ def main():
         epilog="Examples:\n"
                "  python main.py --url https://youtu.be/VIDEO_ID\n"
                "  python main.py --file podcast.mp3\n"
+               "  python main.py --url https://youtu.be/VIDEO_ID --keep-transcript\n"
+               "  python main.py --url https://youtu.be/VIDEO_ID --separate-files\n"
                "  python main.py --setup\n"
                "  python main.py --test\n\n"
-               "Output: Creates a folder in ./output/ named after the video title containing:\n"
-               "  - Original MP3 file\n"
-               "  - JSON transcript file\n"
-               "  - Bilingual MP3 file",
+               "Output: Creates a folder structure in ./output/:\n"
+               "  - output/[Channel Name]/\n"
+               "    - YYYY-MM-DD_VideoTitle_complete.mp3 (default: bilingual + original)\n"
+               "    - YYYY-MM-DD_VideoTitle.mp3 (original, only with --separate-files)\n"
+               "    - YYYY-MM-DD_VideoTitle_bilingual.mp3 (only with --separate-files)\n"
+               "    - YYYY-MM-DD_VideoTitle_transcript.json (only with --keep-transcript)\n"
+               "  (Local files use 'Local Files' as channel name)",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
@@ -166,6 +215,16 @@ def main():
         '--test',
         action='store_true',
         help='Run the test suite to verify functionality'
+    )
+    parser.add_argument(
+        '--keep-transcript',
+        action='store_true',
+        help='Keep the JSON transcript file after processing (default: removed after use)'
+    )
+    parser.add_argument(
+        '--separate-files',
+        action='store_true',
+        help='Keep bilingual and original audio as separate files (default: combined into one file)'
     )
     
     args = parser.parse_args()
@@ -218,7 +277,7 @@ def main():
             sys.exit(1)
         
         # Run translation
-        success = run_translation(input_file, video_output_dir, tracker, api_key)
+        success = run_translation(input_file, video_output_dir, tracker, api_key, args.keep_transcript, args.separate_files)
         
         if not success:
             sys.exit(1)

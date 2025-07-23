@@ -1,107 +1,94 @@
 #!/usr/bin/env python3
 """
-Progress tracking module for YouTube CI Converter
-Provides unified progress tracking for download, translation, and audio generation phases.
+Simple notification system for YouTube CI Converter
+Provides simple text notifications instead of complex progress bars.
 """
 
-try:
-    from tqdm import tqdm
-except ImportError:
-    print("Error: tqdm is required but not installed.")
-    print("Please install it using: pip install tqdm")
-    import sys
-    sys.exit(1)
+import time
 
 
 class UnifiedProgressTracker:
-    """Unified progress bar for the entire YouTube to MP3 + Translation operation."""
+    """Simple notification system for the entire YouTube to MP3 + Translation operation."""
     
     def __init__(self):
-        self.pbar = None
-        self.current_step = 0
-        self.total_steps = 3  # Download, Translation, Audio Generation
-        self.step_weights = {
-            'download': 10,      # 10% of total progress
-            'translation': 40,   # 40% of total progress
-            'audio_gen': 50      # 50% of total progress
-        }
-        self.step_progress = {
-            'download': 0,
-            'translation': 0,
-            'audio_gen': 0
-        }
-    
+        self.start_time = None
+        self.current_step = None
+        
     def start(self, description="Processing"):
-        """Start the unified progress bar."""
-        self.pbar = tqdm(
-            total=100,
-            desc=description,
-            unit='%',
-            bar_format='{l_bar}{bar}| {n:.0f}% [{elapsed}<{remaining}]'
-        )
+        """Start the process with initial notification."""
+        self.start_time = time.time()
+        print(f"\n🔄 {description}")
+        print("=" * (len(description) + 3))
     
     def update_step(self, step_name: str, progress: float, status: str = None):
-        """Update progress for a specific step.
+        """Show a simple notification for the current step.
         
         Args:
             step_name: 'download', 'translation', or 'audio_gen'
-            progress: Progress percentage (0-100) for this step
-            status: Optional status message
+            progress: Progress percentage (0-100) for this step (ignored)
+            status: Status message to display
         """
-        if not self.pbar:
-            return
+        if status and self.current_step != (step_name, status):
+            # Only print if it's a new status to avoid spam
+            self.current_step = (step_name, status)
             
-        # Update step progress
-        self.step_progress[step_name] = min(100, max(0, progress))
-        
-        # Calculate total progress
-        total_progress = (
-            (self.step_progress['download'] * self.step_weights['download'] / 100) +
-            (self.step_progress['translation'] * self.step_weights['translation'] / 100) +
-            (self.step_progress['audio_gen'] * self.step_weights['audio_gen'] / 100)
-        )
-        
-        # Update progress bar
-        self.pbar.n = total_progress
-        if status:
-            self.pbar.set_description(status)
-        self.pbar.refresh()
+            # Add step-specific icons
+            icon_map = {
+                'download': '📥',
+                'translation': '🎌',
+                'audio_gen': '🎵'
+            }
+            icon = icon_map.get(step_name, '🔄')
+            
+            elapsed = time.time() - self.start_time if self.start_time else 0
+            print(f"{icon} [{elapsed:.0f}s] {status}")
     
     def finish(self, message="Complete"):
-        """Complete the progress bar."""
-        if self.pbar:
-            self.pbar.n = 100
-            self.pbar.set_description(message)
-            self.pbar.refresh()
-            self.pbar.close()
-            self.pbar = None
+        """Show completion notification."""
+        if self.start_time:
+            elapsed = time.time() - self.start_time
+            print(f"\n✅ {message} (completed in {elapsed:.0f}s)")
+        else:
+            print(f"\n✅ {message}")
 
 
 class DownloadProgressHook:
-    """Download progress hook for yt-dlp that works with UnifiedProgressTracker."""
+    """Simple download notifications for yt-dlp that works with UnifiedProgressTracker."""
     
     def __init__(self, progress_tracker):
         self.progress_tracker = progress_tracker
         self.conversion_started = False
         self.download_completed = False
+        self.last_notification_time = 0
     
     def __call__(self, d):
+        import time
+        current_time = time.time()
+        
         if d['status'] == 'downloading':
+            # Only update every 5 seconds to avoid spam
+            if current_time - self.last_notification_time < 5:
+                return
+                
             total_bytes = d.get('total_bytes') or d.get('total_bytes_estimate')
             downloaded_bytes = d.get('downloaded_bytes', 0)
             
             if total_bytes and downloaded_bytes:
-                # Scale download to 80% of the download step (leaving 20% for conversion)
-                download_progress = (downloaded_bytes / total_bytes) * 80
-                self.progress_tracker.update_step('download', download_progress, "Downloading video")
+                percentage = (downloaded_bytes / total_bytes) * 100
+                size_mb = downloaded_bytes / (1024 * 1024)
+                total_mb = total_bytes / (1024 * 1024)
+                
+                self.progress_tracker.update_step('download', percentage, 
+                    f"Downloading: {percentage:.0f}% ({size_mb:.1f}MB/{total_mb:.1f}MB)")
+                self.last_notification_time = current_time
                 
         elif d['status'] == 'finished' and not self.download_completed:
             # Download complete, now converting
-            self.progress_tracker.update_step('download', 80, "Converting to MP3...")
+            self.progress_tracker.update_step('download', 90, "Converting to MP3...")
             self.conversion_started = True
             self.download_completed = True
             
     def finish_conversion(self):
         """Call this when conversion is definitely complete."""
         if self.progress_tracker:
-            self.progress_tracker.update_step('download', 100, "Download complete")
+            self.progress_tracker.update_step('download', 100, "Download and conversion complete")

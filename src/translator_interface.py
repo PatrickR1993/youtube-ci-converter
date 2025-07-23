@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 
-def run_translation_with_progress(translator, input_file, output_dir, progress_tracker):
+def run_translation_with_progress(translator, input_file, output_dir, progress_tracker, separate_files=False):
     """Run audio translation with progress tracking."""
     try:
         # Extract sentences with Whisper (0-30% of translation step)
@@ -30,7 +30,7 @@ def run_translation_with_progress(translator, input_file, output_dir, progress_t
         
         # Create bilingual audio with progress updates
         output_file = translator.create_bilingual_audio_with_progress(
-            input_file, translated_sentences, output_dir, progress_tracker
+            input_file, translated_sentences, output_dir, progress_tracker, separate_files
         )
         
         if output_file:
