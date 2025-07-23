@@ -595,7 +595,7 @@ class AudioTranslator:
                 except:
                     pass
     
-    def create_bilingual_audio_with_progress(self, original_audio: Path, sentences: List[Dict], output_dir: Path, progress_tracker) -> Path:
+    def create_bilingual_audio_with_progress(self, original_audio: Path, sentences: List[Dict], output_dir: Path, progress_tracker, separate_files: bool = False) -> Path:
         """Create bilingual audio with progress tracking integration.
         
         Args:
@@ -659,8 +659,52 @@ class AudioTranslator:
                 remaining = original[last_end_time:]
                 bilingual_audio += remaining
             
-            # Export final bilingual audio
-            bilingual_audio.export(str(output_file), format="mp3")
+            # Export bilingual audio
+            bilingual_file = output_dir / f"{original_audio.stem}_bilingual.mp3"
+            bilingual_audio.export(str(bilingual_file), format="mp3")
+            
+            if separate_files:
+                # Keep files separate - return the bilingual file
+                progress_tracker.update_step('audio_gen', 100, "Bilingual audio complete")
+                output_file = bilingual_file
+            else:
+                # Create combined audio: bilingual + audio cue + original
+                progress_tracker.update_step('audio_gen', 90, "Creating combined audio with original")
+                
+                # Create a more noticeable audio cue
+                # 1 second of silence + short beep tone + 1 second of silence
+                audio_cue = AudioSegment.silent(duration=1000)  # 1 second silence
+                
+                # Create a simple beep using sine wave (440Hz for 0.5 seconds)
+                try:
+                    from pydub.generators import Sine
+                    beep = Sine(440).to_audio_segment(duration=500)  # 440Hz for 0.5 seconds
+                    beep = beep - 20  # Reduce volume by 20dB to make it gentle
+                    audio_cue += beep + AudioSegment.silent(duration=1000)  # beep + 1 second silence
+                except ImportError:
+                    # Fallback: just use 2.5 seconds of silence if pydub.generators is not available
+                    audio_cue += AudioSegment.silent(duration=1500)  # 1.5 more seconds of silence
+                
+                # Load the original audio again for the final section
+                original_full = AudioSegment.from_file(str(original_audio))
+                
+                # Combine: bilingual + audio cue + original
+                combined_audio = bilingual_audio + audio_cue + original_full
+                
+                # Export combined audio
+                combined_file = output_dir / f"{original_audio.stem}_complete.mp3"
+                combined_audio.export(str(combined_file), format="mp3")
+                
+                # Remove the separate bilingual file since we have the combined version
+                if bilingual_file.exists():
+                    bilingual_file.unlink()
+                
+                # Remove the original audio file since it's included in the combined version
+                if original_audio.exists():
+                    original_audio.unlink()
+                
+                progress_tracker.update_step('audio_gen', 100, "Combined audio complete")
+                output_file = combined_file
             
             # Save transcript
             transcript_file = output_dir / f"{original_audio.stem}_transcript.json"

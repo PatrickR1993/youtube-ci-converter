@@ -42,10 +42,21 @@ def download_youtube_video(url, output_dir, progress_tracker=None):
             video_info = ydl.extract_info(url, download=False)
             video_title = video_info.get('title', 'Unknown Video')
             channel_name = video_info.get('uploader', video_info.get('channel', 'Unknown Channel'))
+            
+            # Extract upload date and format it as YYYY-MM-DD
+            upload_date = video_info.get('upload_date')  # Format: YYYYMMDD
+            if upload_date:
+                # Convert YYYYMMDD to YYYY-MM-DD
+                formatted_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:8]}"
+            else:
+                formatted_date = "Unknown-Date"
         
         # Sanitize the channel name and video title for use as folder names
         sanitized_channel = sanitize_filename(channel_name)
         sanitized_title = sanitize_filename(video_title)
+        
+        # Create filename with upload date prefix: YYYY-MM-DD_VideoTitle
+        filename_with_date = f"{formatted_date} - {sanitized_title}"
         
         # Create channel directory structure: output/channel_name/
         channel_output_dir = output_dir / sanitized_channel
@@ -70,7 +81,7 @@ def download_youtube_video(url, output_dir, progress_tracker=None):
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
-            'outtmpl': str(video_output_dir / '%(title)s.%(ext)s'),
+            'outtmpl': str(video_output_dir / f'{filename_with_date}.%(ext)s'),
             'noplaylist': True,  # Only download single video, not playlist
             'quiet': True,       # Minimize yt-dlp output
         }
@@ -88,20 +99,27 @@ def download_youtube_video(url, output_dir, progress_tracker=None):
         if progress_hook:
             progress_hook.finish_conversion()
         
-        # Find the new file that was created
-        current_files = set(video_output_dir.glob("*.mp3"))
-        new_files = current_files - existing_files
+        # Find the new file that was created (should match our expected filename)
+        expected_filename = f"{filename_with_date}.mp3"
+        expected_filepath = video_output_dir / expected_filename
         
-        if new_files:
-            # Return the newly created file, video title, and channel name
-            return list(new_files)[0], video_title, channel_name
+        if expected_filepath.exists():
+            # Return the newly created file with upload date prefix
+            return expected_filepath, video_title, channel_name
         else:
-            # Fallback: use the most recently created file
-            mp3_files = list(video_output_dir.glob("*.mp3"))
-            if mp3_files:
-                return max(mp3_files, key=lambda f: f.stat().st_ctime), video_title, channel_name
+            # Fallback: find any new MP3 files
+            current_files = set(video_output_dir.glob("*.mp3"))
+            new_files = current_files - existing_files
+            
+            if new_files:
+                return list(new_files)[0], video_title, channel_name
             else:
-                return None, None, None
+                # Final fallback: use the most recently created file
+                mp3_files = list(video_output_dir.glob("*.mp3"))
+                if mp3_files:
+                    return max(mp3_files, key=lambda f: f.stat().st_ctime), video_title, channel_name
+                else:
+                    return None, None, None
         
     except yt_dlp.DownloadError as e:
         if progress_tracker:
