@@ -7,6 +7,10 @@ A powerful CLI tool that downloads YouTube videos and creates bilingual audio fi
 - 🎵 **YouTube Download**: Convert Japanese YouTube videos to bilingual audio + original audio in one file
 - 🎌 **Japanese Speech Recognition**: OpenAI Whisper API for accurate transcription
 - 🌐 **AI Translation**: GPT models for natural English translations
+- ⚡ **Parallel Processing**: Fast translation and TTS generation using concurrent API requests
+- 🔄 **Smart File Recovery**: Automatic file splitting and retry on Whisper failures (up to 4 attempts)
+- 📦 **Batch Processing**: Process multiple YouTube URLs and local files in one command
+- 📁 **Smart File Organization**: Videos organized by channel with upload dates (YYYY-MM-DD format)
 - 🎙️ **Bilingual Audio**: English→Japanese pattern with timing preservation
 - 🔊 **Natural Text-to-Speech**: OpenAI TTS for human-like English voice
 - 📄 **Optional Transcript Export**: JSON output with timing and translations
@@ -23,6 +27,21 @@ python main.py --file "your_podcast.mp3"
 
 # With API key (if not set as environment variable)
 python main.py --url "https://youtu.be/VIDEO_ID" --openai-key YOUR_API_KEY
+```
+
+### 2. Batch Processing
+```bash
+# Process multiple YouTube videos
+python main.py --url "https://youtu.be/VIDEO_ID1" --url "https://youtu.be/VIDEO_ID2"
+
+# Process multiple audio files
+python main.py --file "audio1.mp3" --file "audio2.mp3"
+
+# Interactive mode - prompts for multiple URLs/files
+python main.py
+
+# Mix URLs and files
+python main.py --url "https://youtu.be/VIDEO_ID" --file "local_audio.mp3"
 ```
 
 ```
