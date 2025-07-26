@@ -102,11 +102,12 @@ def process_youtube_url(args, output_dir, progress_tracker):
         sys.exit(1)
 
 
-def run_translation(input_file, video_output_dir, progress_tracker, api_key, keep_transcript=False, separate_files=False, use_parallel=True):
-    """Run the translation process with optional parallel processing.
+def run_translation(input_file, video_output_dir, progress_tracker, api_key, keep_transcript=False, separate_files=False, use_parallel=True, merge_segments=True):
+    """Run the translation process with optional parallel processing and segment merging.
     
     Args:
         use_parallel: If True, uses parallel processing for faster translation and TTS generation
+        merge_segments: If True, merges short Whisper segments into longer sentences
     """
     # Get the AudioTranslator class
     AudioTranslator = translator_interface.get_audio_translator_class()
@@ -117,9 +118,9 @@ def run_translation(input_file, video_output_dir, progress_tracker, api_key, kee
     # Initialize translator
     translator = AudioTranslator(api_key)
     
-    # Run translation with progress tracking (now with parallel processing option)
+    # Run translation with progress tracking (now with parallel processing and segment merging options)
     output_file = translator_interface.run_translation_with_progress(
-        translator, input_file, video_output_dir, progress_tracker, separate_files, use_parallel
+        translator, input_file, video_output_dir, progress_tracker, separate_files, use_parallel, merge_segments
     )
     
     if output_file:
@@ -177,7 +178,7 @@ def main():
                "  python main.py --url https://youtu.be/VIDEO_ID --no-parallel  # Slower but more compatible\n"
                "  python main.py --setup\n"
                "  python main.py --test\n\n"
-               "Performance: Uses parallel processing by default for faster translation and TTS generation.\n"
+               "Performance: Uses high-concurrency parallel processing by default for much faster translation and TTS.\n"
                "Use --no-parallel if you experience API rate limiting or compatibility issues.\n\n"
                "Output: Creates a folder structure in ~/Downloads/YouTube CI Converter/:\n"
                "  - YouTube CI Converter/[Channel Name]/\n"
@@ -229,6 +230,11 @@ def main():
         action='store_true',
         help='Disable parallel processing for translation and TTS (slower but more compatible)'
     )
+    parser.add_argument(
+        '--short-segments',
+        action='store_true',
+        help='Keep Whisper segments short instead of merging into longer sentences'
+    )
     
     args = parser.parse_args()
     
@@ -279,9 +285,10 @@ def main():
             print("❌ OpenAI API key required. Set OPENAI_API_KEY env var or use --openai-key")
             sys.exit(1)
         
-        # Run translation with parallel processing option
+        # Run translation with parallel processing and segment merging options
         use_parallel = not args.no_parallel  # Default to parallel unless --no-parallel is specified
-        success = run_translation(input_file, video_output_dir, tracker, api_key, args.keep_transcript, args.separate_files, use_parallel)
+        merge_segments = not args.short_segments  # Default to merge unless --short-segments is specified
+        success = run_translation(input_file, video_output_dir, tracker, api_key, args.keep_transcript, args.separate_files, use_parallel, merge_segments)
         
         if not success:
             sys.exit(1)

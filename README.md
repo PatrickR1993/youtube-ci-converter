@@ -7,8 +7,6 @@ A powerful CLI tool that downloads YouTube videos and creates bilingual audio fi
 - 🎵 **YouTube Download**: Convert Japanese YouTube videos to bilingual audio + original audio in one file
 - 🎌 **Japanese Speech Recognition**: OpenAI Whisper API for accurate transcription
 - 🌐 **AI Translation**: GPT models for natural English translations
-- ⚡ **Parallel Processing**: Fast translation and TTS generation using concurrent API requests
-- 📁 **Smart File Organization**: Videos organized by channel with upload dates (YYYY-MM-DD format)
 - 🎙️ **Bilingual Audio**: English→Japanese pattern with timing preservation
 - 🔊 **Natural Text-to-Speech**: OpenAI TTS for human-like English voice
 - 📄 **Optional Transcript Export**: JSON output with timing and translations
@@ -78,19 +76,7 @@ export OPENAI_API_KEY=your_api_key_here
 | `--keep-transcript` | Keep JSON transcript files | `--keep-transcript` |
 | `--separate-files` | Keep bilingual and original audio separate | `--separate-files` |
 | `--no-parallel` | Disable parallel processing (slower, more stable) | `--no-parallel` |
-
-### Performance Tuning
-```bash
-# Default: Fast parallel processing (~3-5x faster)
-python main.py --url "https://youtu.be/VIDEO_ID"
-
-# Conservative: Sequential processing (if you hit API rate limits)
-python main.py --url "https://youtu.be/VIDEO_ID" --no-parallel
-```
-
-**Performance Comparison:**
-- **Parallel processing (default)**: ~3-5x faster for videos with many sentences
-- **Sequential processing**: Slower but more conservative with API rate limits
+| `--short-segments` | Keep Whisper segments short instead of merging into longer sentences | `--short-segments` |
 
 ## 📁 Output Structure
 
@@ -119,6 +105,29 @@ The `_complete.mp3` file contains:
 - ✅ Everything in one convenient file
 - ✅ Clean, organized output folder
 
+### 🔗 Smart Sentence Merging (Default)
+
+The tool automatically merges short Whisper segments into longer, more natural sentences:
+
+**Merging Logic:**
+- ✅ Combines segments with gaps **< 2 seconds**
+- ✅ Respects sentence-ending punctuation (`。！？.!?`)
+- ✅ Splits very long sentences (>200 characters)
+- ✅ Considers capitalization and natural speech patterns
+
+**Example:**
+```
+Short segments: "こんにちは" → "今日は" → "いい天気ですね"
+Merged sentence: "こんにちは 今日は いい天気ですね"
+```
+
+**Benefits:**
+- 📈 **Better translations**: Longer context improves GPT translation quality
+- 🎵 **Natural audio flow**: Fewer interruptions in bilingual audio
+- 💰 **Cost efficient**: Fewer API calls for translation and TTS
+
+Use `--short-segments` to disable merging if you prefer the original short segments.
+
 ## 💰 Cost & Performance
 
 | Service | Usage | Cost |
@@ -137,6 +146,7 @@ The `_complete.mp3` file contains:
 | **OpenAI API errors** | Check API key: `echo $OPENAI_API_KEY`<br>Verify credits at [OpenAI Usage](https://platform.openai.com/usage) |
 | **Permission errors** | Run from a directory with write permissions |
 | **Rate limiting** | Use `--no-parallel` for more conservative API usage |
+| **Large files fail Whisper** | Tool automatically splits files and retries (up to 4 attempts)<br>Supports files up to 16x original Whisper limit |
 
 ## 🧪 Testing
 

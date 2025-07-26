@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 
-def run_translation_with_progress(translator, input_file, output_dir, progress_tracker, separate_files=False, use_parallel=True):
+def run_translation_with_progress(translator, input_file, output_dir, progress_tracker, separate_files=False, use_parallel=True, merge_segments=True):
     """Run audio translation with progress tracking.
     
     Args:
@@ -19,10 +19,11 @@ def run_translation_with_progress(translator, input_file, output_dir, progress_t
         progress_tracker: Progress tracking instance
         separate_files: Whether to keep files separate
         use_parallel: Whether to use parallel processing for translation and TTS (much faster)
+        merge_segments: Whether to merge short Whisper segments into longer sentences
     """
     try:
         # Extract sentences with Whisper (0-30% of translation step)
-        sentences = translator.extract_sentences_whisper(input_file, progress_tracker)
+        sentences = translator.extract_sentences_whisper(input_file, progress_tracker, merge_segments=merge_segments)
         
         if not sentences:
             return False
