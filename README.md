@@ -7,8 +7,6 @@ A powerful CLI tool that downloads YouTube videos and creates bilingual audio fi
 - 🎵 **YouTube Download**: Convert Japanese YouTube videos to bilingual audio + original audio in one file
 - 🎌 **Japanese Speech Recognition**: OpenAI Whisper API for accurate transcription
 - 🌐 **AI Translation**: GPT models for natural English translations
-- ⚡ **Parallel Processing**: Fast translation and TTS generation using concurrent API requests
-- 🔄 **Smart File Recovery**: Automatic file splitting and retry on Whisper failures (up to 4 attempts)
 - 📦 **Batch Processing**: Process multiple YouTube URLs and local files in one command
 - 📁 **Smart File Organization**: Videos organized by channel with upload dates (YYYY-MM-DD format)
 - 🎙️ **Bilingual Audio**: English→Japanese pattern with timing preservation
@@ -31,19 +29,11 @@ python main.py --url "https://youtu.be/VIDEO_ID" --openai-key YOUR_API_KEY
 
 ### 2. Batch Processing
 ```bash
-# Process multiple YouTube videos
-python main.py --url "https://youtu.be/VIDEO_ID1" --url "https://youtu.be/VIDEO_ID2"
-
-# Process multiple audio files
-python main.py --file "audio1.mp3" --file "audio2.mp3"
-
 # Interactive mode - prompts for multiple URLs/files
 python main.py
 
 # Mix URLs and files
 python main.py --url "https://youtu.be/VIDEO_ID" --file "local_audio.mp3"
-```
-
 ```
 
 ## 🛠️ Installation & Setup
@@ -117,35 +107,6 @@ The `_complete.mp3` file contains:
 1. **🗣️ Bilingual Section**: English translation → Japanese original (for each sentence)
 2. **🔔 Audio Cue**: Brief silence + gentle beep + silence (separates sections)  
 3. **📼 Original Section**: Complete original Japanese audio
-
-**Benefits:**
-- ✅ Practice with translations first
-- ✅ Hear the original after for comparison  
-- ✅ Everything in one convenient file
-- ✅ Clean, organized output folder
-
-### 🔗 Smart Sentence Merging (Default)
-
-The tool automatically merges short Whisper segments into longer, more natural sentences:
-
-**Merging Logic:**
-- ✅ Combines segments with gaps **< 2 seconds**
-- ✅ Respects sentence-ending punctuation (`。！？.!?`)
-- ✅ Splits very long sentences (>200 characters)
-- ✅ Considers capitalization and natural speech patterns
-
-**Example:**
-```
-Short segments: "こんにちは" → "今日は" → "いい天気ですね"
-Merged sentence: "こんにちは 今日は いい天気ですね"
-```
-
-**Benefits:**
-- 📈 **Better translations**: Longer context improves GPT translation quality
-- 🎵 **Natural audio flow**: Fewer interruptions in bilingual audio
-- 💰 **Cost efficient**: Fewer API calls for translation and TTS
-
-Use `--short-segments` to disable merging if you prefer the original short segments.
 
 ## 💰 Cost & Performance
 
