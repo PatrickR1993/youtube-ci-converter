@@ -8,6 +8,8 @@ import os
 import sys
 import json
 import time
+import asyncio
+import concurrent.futures
 from pathlib import Path
 from typing import List, Dict, Tuple
 import argparse
@@ -56,75 +58,139 @@ class AudioTranslator:
         
         self.temp_dir = Path(tempfile.mkdtemp())
         
-    def _estimate_chunk_size(self, chunk_duration_ms: int, bytes_per_ms: float) -> float:
-        """Estimate the file size of a chunk in MB.
+    def _split_audio_file(self, audio_file: Path, temp_dir: Path) -> tuple[Path, Path]:
+        """Split an audio file into two equal halves.
         
         Args:
-            chunk_duration_ms: Duration of chunk in milliseconds
-            bytes_per_ms: Estimated bytes per millisecond from original file
+            audio_file: Path to the audio file to split
+            temp_dir: Directory to store temporary split files
             
         Returns:
-            Estimated size in MB
+            Tuple of (first_half_path, second_half_path, split_time_ms)
         """
-        estimated_bytes = chunk_duration_ms * bytes_per_ms
-        return estimated_bytes / (1024 * 1024)
-    
-    def _get_safe_chunk_duration(self, audio_file: Path, audio_duration_ms: int) -> int:
-        """Calculate a safe chunk duration to stay under API limits.
+        try:
+            # Load audio file
+            audio = AudioSegment.from_file(str(audio_file))
+            duration = len(audio)  # Duration in milliseconds
+            
+            # Split into two halves
+            first_half = audio[:duration // 2]
+            second_half = audio[duration // 2:]
+            
+            # Create temporary file paths
+            base_name = audio_file.stem
+            first_half_path = temp_dir / f"{base_name}_part1.mp3"
+            second_half_path = temp_dir / f"{base_name}_part2.mp3"
+            
+            # Export both halves
+            first_half.export(str(first_half_path), format="mp3")
+            second_half.export(str(second_half_path), format="mp3")
+            
+            return first_half_path, second_half_path, duration // 2
+            
+        except Exception as e:
+            print(f"❌ Failed to split audio file: {e}")
+            raise
+
+    def _merge_segments_into_sentences(self, segments: List[Dict], max_gap_seconds: float = 2.0, min_sentence_length: int = 20) -> List[Dict]:
+        """Merge short Whisper segments into longer, more natural sentences.
         
         Args:
-            audio_file: Path to the original audio file
-            audio_duration_ms: Total duration in milliseconds
+            segments: List of segment dictionaries from Whisper
+            max_gap_seconds: Maximum gap between segments to merge (default: 2 seconds)
+            min_sentence_length: Minimum characters for a sentence before forcing a split
             
         Returns:
-            Safe chunk duration in milliseconds
+            List of merged sentence dictionaries
         """
-        original_file_size = audio_file.stat().st_size
-        bytes_per_ms = original_file_size / audio_duration_ms
+        if not segments:
+            return []
         
-        # Target 18MB per chunk to stay well under 26MB limit
-        target_chunk_size = 18 * 1024 * 1024
-        optimal_chunk_duration_ms = int(target_chunk_size / bytes_per_ms)
+        merged_sentences = []
+        current_sentence = {
+            "text": "",
+            "start_time": segments[0]["start_time"],
+            "end_time": segments[0]["end_time"]
+        }
         
-        # Ensure chunks are between 3-6 minutes for safety and efficiency
-        min_chunk_duration = 3 * 60 * 1000   # 3 minutes
-        max_chunk_duration = 6 * 60 * 1000   # 6 minutes
+        for i, segment in enumerate(segments):
+            segment_text = segment["text"].strip()
+            
+            # Skip empty segments
+            if not segment_text:
+                continue
+            
+            # Check if we should start a new sentence
+            should_split = False
+            
+            if current_sentence["text"]:  # Not the first segment
+                # Calculate gap between current sentence end and this segment start
+                gap = segment["start_time"] - current_sentence["end_time"]
+                
+                # Split conditions:
+                # 1. Long pause (more than max_gap_seconds)
+                # 2. Previous text ends with sentence-ending punctuation
+                # 3. Current sentence is getting very long (over 200 characters)
+                # 4. Segment starts with capital letter after some content exists
+                
+                prev_text = current_sentence["text"].rstrip()
+                
+                if (gap >= max_gap_seconds or 
+                    prev_text.endswith(('。', '！', '？', '.', '!', '?')) or
+                    len(current_sentence["text"]) > 200 or
+                    (len(current_sentence["text"]) > min_sentence_length and 
+                     segment_text and segment_text[0].isupper() and 
+                     gap > 0.8)):  # Shorter gap threshold for capital letters
+                    
+                    should_split = True
+            
+            if should_split and current_sentence["text"].strip():
+                # Finalize current sentence
+                merged_sentences.append(current_sentence.copy())
+                
+                # Start new sentence
+                current_sentence = {
+                    "text": segment_text,
+                    "start_time": segment["start_time"],
+                    "end_time": segment["end_time"]
+                }
+            else:
+                # Merge with current sentence
+                if current_sentence["text"]:
+                    # Add appropriate spacing
+                    if (current_sentence["text"].rstrip().endswith(('、', ',')) or 
+                        segment_text.startswith(('、', ','))):
+                        # No extra space needed for comma continuation
+                        current_sentence["text"] += segment_text
+                    else:
+                        # Add space between segments
+                        current_sentence["text"] += " " + segment_text
+                else:
+                    current_sentence["text"] = segment_text
+                    current_sentence["start_time"] = segment["start_time"]
+                
+                # Update end time
+                current_sentence["end_time"] = segment["end_time"]
         
-        return max(min_chunk_duration, min(optimal_chunk_duration_ms, max_chunk_duration))
+        # Add the final sentence
+        if current_sentence["text"].strip():
+            merged_sentences.append(current_sentence)
         
-    def extract_sentences_whisper(self, audio_file: Path, progress_tracker=None) -> List[Dict]:
-        """Extract Japanese sentences using OpenAI Whisper API.
+        return merged_sentences
+
+    def _extract_sentences_whisper_single(self, audio_file: Path, time_offset: float = 0.0, merge_segments: bool = True) -> List[Dict]:
+        """Extract sentences from a single audio file using Whisper API.
         
         Args:
             audio_file: Path to the audio file
-            progress_tracker: Optional UnifiedProgressTracker for progress updates
+            time_offset: Time offset to add to all timestamps (for split files)
+            merge_segments: Whether to merge short segments into longer sentences
             
         Returns:
             List of dictionaries with text, start_time, end_time
         """
-        if not self.openai_client:
-            raise ValueError("OpenAI API key required for Whisper transcription")
-            
-        # Update progress tracker
-        if progress_tracker:
-            progress_tracker.update_step('translation', 0, "Checking audio file size")
-        
-        # Check file size and chunk if necessary (OpenAI has ~26MB limit)
-        file_size = audio_file.stat().st_size
-        max_size = 20 * 1024 * 1024  # 20MB to be very safe (was 25MB)
-        file_size_mb = file_size / (1024 * 1024)
-        
-        if file_size > max_size:
-            if progress_tracker:
-                progress_tracker.update_step('translation', 5, f"Large file ({file_size_mb:.1f}MB) - will process in chunks")
-            return self._transcribe_large_audio(audio_file, progress_tracker)
-        
         try:
-            if progress_tracker:
-                progress_tracker.update_step('translation', 10, f"Transcribing audio ({file_size_mb:.1f}MB)")
-                
             with open(audio_file, "rb") as audio:
-                # Use Whisper API for transcription with timestamps
                 response = self.openai_client.audio.transcriptions.create(
                     model="whisper-1",
                     file=audio,
@@ -133,306 +199,162 @@ class AudioTranslator:
                     timestamp_granularities=["segment"]
                 )
             
-            # Update progress after API call
-            if progress_tracker:
-                progress_tracker.update_step('translation', 15, f"Transcription complete - processing {len(response.segments)} segments")
-            
-            sentences = []
+            segments = []
             for i, segment in enumerate(response.segments):
                 try:
                     # Try attribute access first (newer OpenAI library)
                     text = segment.text.strip()
-                    start_time = segment.start
-                    end_time = segment.end
+                    start_time = segment.start + time_offset
+                    end_time = segment.end + time_offset
                     
-                    sentences.append({
-                        "text": text,
-                        "start_time": start_time,
-                        "end_time": end_time
-                    })
+                    if text:  # Only add non-empty segments
+                        segments.append({
+                            "text": text,
+                            "start_time": start_time,
+                            "end_time": end_time
+                        })
                     
                 except AttributeError:
                     # Fallback to dictionary access (older format)
                     try:
                         text = segment["text"].strip()
-                        start_time = segment["start"]
-                        end_time = segment["end"]
+                        start_time = segment["start"] + time_offset
+                        end_time = segment["end"] + time_offset
                         
-                        sentences.append({
-                            "text": text,
-                            "start_time": start_time,
-                            "end_time": end_time
-                        })
-                        
-                    except (KeyError, TypeError) as e:
-                        print(f"⚠️  Could not parse segment {i}: {e}")
-                        print(f"   Segment type: {type(segment)}")
-                        print(f"   Segment content: {segment}")
-                        
-                        # Try getattr as last resort
-                        try:
-                            text = getattr(segment, 'text', '') or str(segment)
-                            start_time = getattr(segment, 'start', i * 10)  # Estimate timing
-                            end_time = getattr(segment, 'end', (i + 1) * 10)
-                            
-                            if text.strip():
-                                sentences.append({
-                                    "text": text.strip(),
-                                    "start_time": start_time,
-                                    "end_time": end_time
-                                })
-                        except Exception as final_err:
-                            print(f"   Final fallback failed: {final_err}")
-                            continue
-            
-            # Update progress tracker
-            if progress_tracker:
-                progress_tracker.update_step('translation', 30, f"Extracted {len(sentences)} Japanese sentences")
-            
-            return sentences
-            
-        except Exception as e:
-            print(f"❌ Whisper transcription failed: {e}")
-            return []
-    
-    def _transcribe_large_audio(self, audio_file: Path, progress_tracker=None) -> List[Dict]:
-        """Transcribe large audio files by chunking them into smaller pieces.
-        
-        Args:
-            audio_file: Path to the large audio file
-            progress_tracker: Optional UnifiedProgressTracker for progress updates
-            
-        Returns:
-            List of dictionaries with text, start_time, end_time (merged from all chunks)
-        """
-        try:
-            # Load the audio file
-            if progress_tracker:
-                progress_tracker.update_step('translation', 5, "Loading audio file for chunking")
-            
-            audio = AudioSegment.from_file(audio_file)
-            
-            # Calculate optimal chunk duration using utility function
-            total_duration_ms = len(audio)
-            chunk_duration_ms = self._get_safe_chunk_duration(audio_file, total_duration_ms)
-            
-            # Estimate chunk sizes for user feedback
-            original_file_size = audio_file.stat().st_size
-            bytes_per_ms = original_file_size / total_duration_ms
-            estimated_chunk_size_mb = self._estimate_chunk_size(chunk_duration_ms, bytes_per_ms)
-            
-            chunks = []
-            total_duration = len(audio)
-            num_chunks = (total_duration + chunk_duration_ms - 1) // chunk_duration_ms  # Ceiling division
-            
-            if progress_tracker:
-                progress_tracker.update_step('translation', 10, f"Splitting into {num_chunks} chunks (~{estimated_chunk_size_mb:.1f}MB each)")
-            
-            # Split audio into chunks
-            for i in range(0, total_duration, chunk_duration_ms):
-                chunk = audio[i:i + chunk_duration_ms]
-                chunk_start_time = i / 1000.0  # Convert to seconds
-                chunks.append((chunk, chunk_start_time))
-            
-            all_sentences = []
-            
-            # Process each chunk with size validation
-            for chunk_idx, (chunk, chunk_start_time) in enumerate(chunks):
-                if progress_tracker:
-                    chunk_progress = 15 + (chunk_idx / len(chunks)) * 70  # 15-85% for chunk processing
-                    progress_tracker.update_step('translation', chunk_progress, 
-                                                f"Transcribing chunk {chunk_idx + 1}/{len(chunks)}")
-                
-                # Export chunk to temporary file
-                chunk_file = self.temp_dir / f"chunk_{chunk_idx}.wav"
-                chunk.export(chunk_file, format="wav")
-                
-                # Validate chunk size before sending to API
-                chunk_size = chunk_file.stat().st_size
-                chunk_size_mb = chunk_size / (1024 * 1024)
-                max_size_mb = 25  # Stay under 26MB limit
-                
-                if chunk_size > max_size_mb * 1024 * 1024:
-                    print(f"⚠️  Chunk {chunk_idx + 1} is {chunk_size_mb:.1f}MB (over {max_size_mb}MB limit)")
-                    
-                    # If chunk is still too large, use recursive splitting
-                    if chunk_size > 26 * 1024 * 1024:  # Over hard limit
-                        print(f"🔄 Splitting chunk {chunk_idx + 1} recursively into smaller pieces...")
-                        
-                        # Use recursive splitting to handle extremely large chunks
-                        sub_sentences = self._split_and_transcribe_chunk(
-                            chunk, chunk_start_time, chunk_idx, max_size_bytes=25 * 1024 * 1024
-                        )
-                        all_sentences.extend(sub_sentences)
-                        
-                        # Clean up main chunk file
-                        if chunk_file.exists():
-                            chunk_file.unlink()
-                        continue
-                
-                try:
-                    # Transcribe this chunk
-                    with open(chunk_file, "rb") as audio_chunk:
-                        response = self.openai_client.audio.transcriptions.create(
-                            model="whisper-1",
-                            file=audio_chunk,
-                            language="ja",  # Japanese
-                            response_format="verbose_json",
-                            timestamp_granularities=["segment"]
-                        )
-                    
-                    # Process segments and adjust timestamps
-                    for segment in response.segments:
-                        try:
-                            # Try attribute access first (newer OpenAI library)
-                            text = segment.text.strip()
-                            start_time = segment.start + chunk_start_time
-                            end_time = segment.end + chunk_start_time
-                            
-                            if text:  # Only add non-empty segments
-                                all_sentences.append({
-                                    "text": text,
-                                    "start_time": start_time,
-                                    "end_time": end_time
-                                })
-                                
-                        except AttributeError:
-                            # Fallback to dictionary access
-                            try:
-                                text = segment["text"].strip()
-                                start_time = segment["start"] + chunk_start_time
-                                end_time = segment["end"] + chunk_start_time
-                                
-                                if text:
-                                    all_sentences.append({
-                                        "text": text,
-                                        "start_time": start_time,
-                                        "end_time": end_time
-                                    })
-                                    
-                            except (KeyError, TypeError):
-                                print(f"⚠️  Could not parse segment in chunk {chunk_idx}")
-                                continue
-                
-                except Exception as e:
-                    print(f"⚠️  Failed to transcribe chunk {chunk_idx + 1}: {e}")
-                    continue
-                
-                finally:
-                    # Clean up temporary chunk file
-                    if chunk_file.exists():
-                        chunk_file.unlink()
-                
-                # Small delay between API calls
-                time.sleep(0.5)
-            
-            if progress_tracker:
-                progress_tracker.update_step('translation', 90, f"Merged {len(all_sentences)} segments from {len(chunks)} chunks")
-            
-            return all_sentences
-            
-        except Exception as e:
-            print(f"❌ Large audio transcription failed: {e}")
-            return []
-    
-    def _split_and_transcribe_chunk(self, chunk: AudioSegment, chunk_start_time: float, 
-                                  chunk_idx: int, max_size_bytes: int = 25 * 1024 * 1024,
-                                  recursion_depth: int = 0) -> List[Dict]:
-        """Recursively split and transcribe a chunk that's too large for the API.
-        
-        Args:
-            chunk: AudioSegment that needs to be split
-            chunk_start_time: Start time offset for this chunk in seconds
-            chunk_idx: Index of the parent chunk (for naming)
-            max_size_bytes: Maximum allowed size in bytes
-            recursion_depth: Current recursion depth (for safety)
-            
-        Returns:
-            List of transcribed sentences with correct timestamps
-        """
-        # Safety check to prevent infinite recursion
-        if recursion_depth > 5:
-            print(f"⚠️  Maximum recursion depth reached for chunk {chunk_idx}. Skipping...")
-            return []
-        
-        # Also check minimum chunk size - if chunk is too small, skip it
-        if len(chunk) < 1000:  # Less than 1 second
-            print(f"⚠️  Chunk {chunk_idx} too small ({len(chunk)}ms). Skipping...")
-            return []
-        
-        sentences = []
-        
-        # Export chunk to check its size
-        temp_file = self.temp_dir / f"temp_chunk_{chunk_idx}_check.wav"
-        chunk.export(temp_file, format="wav")
-        chunk_size = temp_file.stat().st_size
-        
-        if chunk_size <= max_size_bytes:
-            # Chunk is small enough, transcribe it
-            try:
-                with open(temp_file, "rb") as audio_chunk:
-                    response = self.openai_client.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=audio_chunk,
-                        language="ja",
-                        response_format="verbose_json",
-                        timestamp_granularities=["segment"]
-                    )
-                
-                # Process segments with adjusted timestamps
-                for segment in response.segments:
-                    try:
-                        text = segment.text.strip()
-                        start_time = segment.start + chunk_start_time
-                        end_time = segment.end + chunk_start_time
-                        
-                        if text:
-                            sentences.append({
+                        if text:  # Only add non-empty segments
+                            segments.append({
                                 "text": text,
                                 "start_time": start_time,
                                 "end_time": end_time
                             })
-                    except (AttributeError, KeyError, TypeError):
-                        continue
                         
-            except Exception as e:
-                print(f"⚠️  Failed to transcribe chunk: {e}")
-            finally:
-                if temp_file.exists():
-                    temp_file.unlink()
-        else:
-            # Chunk is still too large, split it further
-            chunk_size_mb = chunk_size / (1024 * 1024)
-            print(f"   🔄 Chunk still {chunk_size_mb:.1f}MB, splitting further...")
+                    except (KeyError, TypeError) as e:
+                        print(f"⚠️  Could not parse segment {i}: {e}")
+                        continue
             
-            # Split into smaller pieces (aim for 4 pieces to be more aggressive)
-            quarter_duration = len(chunk) // 4
-            sub_chunks = [
-                (chunk[0:quarter_duration], 0),
-                (chunk[quarter_duration:2*quarter_duration], quarter_duration),
-                (chunk[2*quarter_duration:3*quarter_duration], 2*quarter_duration),
-                (chunk[3*quarter_duration:], 3*quarter_duration)
-            ]
+            # Merge segments into longer sentences if requested
+            if merge_segments and segments:
+                sentences = self._merge_segments_into_sentences(segments)
+                print(f"📝 Merged {len(segments)} segments into {len(sentences)} longer sentences")
+                return sentences
+            else:
+                return segments
             
-            # Recursively process each sub-chunk
-            for i, (sub_chunk, offset_ms) in enumerate(sub_chunks):
-                if len(sub_chunk) > 0:  # Skip empty chunks
-                    offset_seconds = offset_ms / 1000.0
-                    sub_sentences = self._split_and_transcribe_chunk(
-                        sub_chunk, 
-                        chunk_start_time + offset_seconds, 
-                        f"{chunk_idx}_{i}",
-                        max_size_bytes,
-                        recursion_depth + 1
-                    )
-                    sentences.extend(sub_sentences)
-        
-        # Clean up temp file
-        if temp_file.exists():
-            temp_file.unlink()
-            
-        return sentences
+        except Exception as e:
+            raise Exception(f"Whisper transcription failed: {e}")
 
+    def extract_sentences_whisper(self, audio_file: Path, progress_tracker=None, max_splits: int = 4, current_split: int = 0, merge_segments: bool = True) -> List[Dict]:
+        """Extract Japanese sentences using OpenAI Whisper API with recursive splitting on failure.
+        
+        Args:
+            audio_file: Path to the audio file
+            progress_tracker: Optional UnifiedProgressTracker for progress updates
+            max_splits: Maximum number of recursive splits (4 times = 16 segments max)
+            current_split: Current split level (internal use)
+            merge_segments: Whether to merge short segments into longer sentences (default: True)
+            
+        Returns:
+            List of dictionaries with text, start_time, end_time
+        """
+        if not self.openai_client:
+            raise ValueError("OpenAI API key required for Whisper transcription")
+            
+        # Update progress tracker on first call
+        if current_split == 0 and progress_tracker:
+            progress_tracker.update_step('translation', 0, "Starting audio transcription")
+        
+        # Get file size for user feedback
+        file_size = audio_file.stat().st_size
+        file_size_mb = file_size / (1024 * 1024)
+        
+        # Try transcribing the file directly
+        try:
+            if progress_tracker and current_split == 0:
+                progress_tracker.update_step('translation', 10, f"Transcribing audio ({file_size_mb:.1f}MB)")
+            elif current_split > 0:
+                print(f"🔄 Attempting transcription of split {current_split + 1} ({file_size_mb:.1f}MB)")
+                
+            sentences = self._extract_sentences_whisper_single(audio_file, 0.0, merge_segments)
+            
+            # Update progress after successful transcription
+            if progress_tracker and current_split == 0:
+                progress_tracker.update_step('translation', 30, f"Extracted {len(sentences)} Japanese sentences")
+            elif current_split > 0:
+                print(f"✅ Successfully transcribed split {current_split + 1}: {len(sentences)} sentences")
+            
+            return sentences
+            
+        except Exception as e:
+            # If we've reached max splits, give up
+            if current_split >= max_splits:
+                print(f"❌ Whisper transcription failed after {max_splits} splits: {e}")
+                if "file size" in str(e).lower() or "too large" in str(e).lower():
+                    print("💡 Tip: Try converting your audio to a lower bitrate or shorter duration")
+                return []
+            
+            # Try splitting the file and processing recursively
+            print(f"⚠️  Whisper failed (attempt {current_split + 1}): {e}")
+            print(f"🔄 Splitting audio file and retrying... (split {current_split + 1}/{max_splits})")
+            
+            try:
+                # Create temporary directory for splits
+                import tempfile
+                temp_dir = Path(tempfile.mkdtemp(prefix="whisper_split_"))
+                
+                try:
+                    # Split the audio file
+                    first_half_path, second_half_path, split_time_ms = self._split_audio_file(audio_file, temp_dir)
+                    split_time_seconds = split_time_ms / 1000.0
+                    
+                    if progress_tracker and current_split == 0:
+                        progress_tracker.update_step('translation', 15, f"File too large, splitting into segments (attempt {current_split + 1})")
+                    
+                    # Recursively process both halves
+                    first_sentences = self.extract_sentences_whisper(
+                        first_half_path, 
+                        progress_tracker=None,  # Don't update progress for sub-calls
+                        max_splits=max_splits, 
+                        current_split=current_split + 1,
+                        merge_segments=merge_segments
+                    )
+                    
+                    second_sentences = self.extract_sentences_whisper(
+                        second_half_path, 
+                        progress_tracker=None,  # Don't update progress for sub-calls
+                        max_splits=max_splits, 
+                        current_split=current_split + 1,
+                        merge_segments=merge_segments
+                    )
+                    
+                    # Adjust timestamps for second half
+                    for sentence in second_sentences:
+                        sentence["start_time"] += split_time_seconds
+                        sentence["end_time"] += split_time_seconds
+                    
+                    # Combine results
+                    all_sentences = first_sentences + second_sentences
+                    
+                    if progress_tracker and current_split == 0:
+                        progress_tracker.update_step('translation', 30, f"Successfully split and transcribed: {len(all_sentences)} sentences total")
+                    
+                    print(f"✅ Successfully processed split audio: {len(all_sentences)} total sentences")
+                    return all_sentences
+                    
+                finally:
+                    # Clean up temporary files
+                    try:
+                        if first_half_path.exists():
+                            first_half_path.unlink()
+                        if second_half_path.exists():
+                            second_half_path.unlink()
+                        temp_dir.rmdir()
+                    except Exception as cleanup_error:
+                        print(f"⚠️  Warning: Could not clean up temporary files: {cleanup_error}")
+                        
+            except Exception as split_error:
+                print(f"❌ Failed to split audio file: {split_error}")
+                return []
+    
     def translate_sentences(self, sentences: List[Dict], progress_tracker=None) -> List[Dict]:
         """Translate Japanese sentences to English.
         
@@ -488,6 +410,145 @@ class AudioTranslator:
                 sentence["english"] = f"[Translation failed: {japanese_text}]"
         
         return sentences
+    
+    def translate_single_sentence(self, sentence_data: Tuple[int, Dict]) -> Tuple[int, Dict]:
+        """Translate a single sentence - designed for parallel execution.
+        
+        Args:
+            sentence_data: Tuple of (index, sentence_dict)
+            
+        Returns:
+            Tuple of (index, updated_sentence_dict)
+        """
+        i, sentence = sentence_data
+        japanese_text = sentence["text"]
+        
+        try:
+            if self.openai_client:
+                # Use GPT for high-quality translation
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {
+                            "role": "system", 
+                            "content": "You are a professional Japanese to English translator. Translate the following Japanese text to natural, fluent English. Preserve the meaning and tone. Only return the translation, no explanations."
+                        },
+                        {
+                            "role": "user", 
+                            "content": japanese_text
+                        }
+                    ],
+                    max_tokens=200,
+                    temperature=0.3
+                )
+                english_text = response.choices[0].message.content.strip()
+            else:
+                # Fallback: Use a simple translation service or placeholder
+                english_text = f"[Translation of: {japanese_text[:50]}...]"
+            
+            sentence["english"] = english_text
+            return i, sentence
+            
+        except Exception as e:
+            print(f"⚠️  Translation failed for sentence {i+1}: {e}")
+            sentence["english"] = f"[Translation failed: {japanese_text}]"
+            return i, sentence
+    
+    def translate_sentences_parallel(self, sentences: List[Dict], progress_tracker=None, max_workers: int = 20) -> List[Dict]:
+        """Translate all sentences in parallel for much faster processing.
+        
+        Args:
+            sentences: List of sentence dictionaries
+            progress_tracker: Optional UnifiedProgressTracker for progress updates
+            max_workers: Maximum number of concurrent translation requests (increased for better performance)
+            
+        Returns:
+            List of sentences with English translations added
+        """
+        total_sentences = len(sentences)
+        
+        # Prepare data for parallel processing
+        sentence_data = [(i, sentence.copy()) for i, sentence in enumerate(sentences)]
+        
+        if progress_tracker:
+            progress_tracker.update_step('translation', 30, f"Starting parallel translation of {total_sentences} sentences")
+        
+        # Use ThreadPoolExecutor for parallel API calls
+        translated_results = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all translation tasks
+            future_to_index = {
+                executor.submit(self.translate_single_sentence, data): data[0] 
+                for data in sentence_data
+            }
+            
+            # Process completed translations
+            completed = 0
+            for future in concurrent.futures.as_completed(future_to_index):
+                try:
+                    index, translated_sentence = future.result()
+                    translated_results[index] = translated_sentence
+                    completed += 1
+                    
+                    # Update progress
+                    if progress_tracker:
+                        translation_progress = 30 + (completed / total_sentences) * 70
+                        progress_tracker.update_step('translation', translation_progress, f"Translated {completed}/{total_sentences}")
+                        
+                except Exception as e:
+                    index = future_to_index[future]
+                    print(f"⚠️  Translation failed for sentence {index+1}: {e}")
+                    # Keep original sentence with failed translation marker
+                    translated_results[index] = sentences[index].copy()
+                    translated_results[index]["english"] = f"[Translation failed: {sentences[index]['text']}]"
+                    completed += 1
+        
+        # Rebuild sentences list in original order
+        result_sentences = []
+        for i in range(total_sentences):
+            if i in translated_results:
+                result_sentences.append(translated_results[i])
+            else:
+                # Fallback for any missing translations
+                fallback = sentences[i].copy()
+                fallback["english"] = f"[Translation missing: {sentences[i]['text']}]"
+                result_sentences.append(fallback)
+        
+        return result_sentences
+    
+    def generate_english_audio_for_sentence(self, sentence_data: Tuple[int, str, Path]) -> Tuple[int, bool, Path]:
+        """Generate English audio for a single sentence - designed for parallel execution.
+        
+        Args:
+            sentence_data: Tuple of (index, english_text, output_file_path)
+            
+        Returns:
+            Tuple of (index, success_bool, output_file_path)
+        """
+        i, text, output_file = sentence_data
+        
+        try:
+            if self.openai_client:
+                # Generate speech using OpenAI TTS
+                response = self.openai_client.audio.speech.create(
+                    model="tts-1",
+                    voice="alloy",
+                    input=text,
+                    response_format="mp3"
+                )
+                
+                # Save audio to file
+                with open(output_file, 'wb') as f:
+                    f.write(response.content)
+                
+                return i, True, output_file
+            else:
+                print(f"⚠️  No OpenAI client available for TTS")
+                return i, False, output_file
+                
+        except Exception as e:
+            print(f"⚠️  TTS generation failed for sentence {i+1}: {e}")
+            return i, False, output_file
     
     def generate_english_audio(self, text: str, output_file: Path) -> bool:
         """Generate English speech audio from text using OpenAI TTS.
@@ -596,27 +657,68 @@ class AudioTranslator:
                     pass
     
     def create_bilingual_audio_with_progress(self, original_audio: Path, sentences: List[Dict], output_dir: Path, progress_tracker, separate_files: bool = False) -> Path:
-        """Create bilingual audio with progress tracking integration.
+        """Create bilingual audio with progress tracking integration and parallel TTS generation.
         
         Args:
             original_audio: Path to original Japanese audio
             sentences: List of translated sentences with timing
             output_dir: Directory to save the bilingual audio
             progress_tracker: UnifiedProgressTracker instance
+            separate_files: Whether to keep files separate or create combined version
             
         Returns:
             Path to output file if successful, None otherwise
         """
         try:
-            # Create output filename
-            output_file = output_dir / f"{original_audio.stem}_bilingual.mp3"
-            
             # Load original audio
             original = AudioSegment.from_file(str(original_audio))
-            bilingual_audio = AudioSegment.empty()
-            
-            last_end_time = 0
             total_segments = len(sentences)
+            
+            # Step 1: Generate all English audio files in parallel
+            progress_tracker.update_step('audio_gen', 10, f"Generating {total_segments} English audio files in parallel")
+            
+            # Prepare data for parallel TTS generation
+            tts_data = []
+            english_files = {}
+            for i, sentence in enumerate(sentences):
+                english_file = self.temp_dir / f"english_{i}.mp3"
+                english_files[i] = english_file
+                tts_data.append((i, sentence["english"], english_file))
+            
+            # Generate all English audio in parallel (much faster!)
+            tts_results = {}
+            max_tts_workers = 20  # Increased TTS workers for maximum parallel processing
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_tts_workers) as executor:
+                # Submit all TTS tasks
+                future_to_index = {
+                    executor.submit(self.generate_english_audio_for_sentence, data): data[0] 
+                    for data in tts_data
+                }
+                
+                # Process completed TTS generations
+                completed_tts = 0
+                for future in concurrent.futures.as_completed(future_to_index):
+                    try:
+                        index, success, file_path = future.result()
+                        tts_results[index] = success
+                        completed_tts += 1
+                        
+                        # Update progress (10-60% for TTS generation)
+                        tts_progress = 10 + (completed_tts / total_segments) * 50
+                        progress_tracker.update_step('audio_gen', tts_progress, f"Generated TTS {completed_tts}/{total_segments}")
+                        
+                    except Exception as e:
+                        index = future_to_index[future]
+                        print(f"⚠️  TTS generation failed for sentence {index+1}: {e}")
+                        tts_results[index] = False
+                        completed_tts += 1
+            
+            # Step 2: Assemble the final bilingual audio
+            progress_tracker.update_step('audio_gen', 60, "Assembling bilingual audio from generated segments")
+            
+            bilingual_audio = AudioSegment.empty()
+            last_end_time = 0
             
             for i, sentence in enumerate(sentences):
                 start_ms = int(sentence["start_time"] * 1000)
@@ -627,19 +729,15 @@ class AudioTranslator:
                     gap = original[last_end_time:start_ms]
                     bilingual_audio += gap
                 
-                # Generate English audio
-                english_file = self.temp_dir / f"english_{i}.mp3"
-                if self.generate_english_audio(sentence["english"], english_file):
-                    english_audio = AudioSegment.from_file(str(english_file))
-                    
-                    # Add English translation
-                    bilingual_audio += english_audio
-                    
-                    # Add small pause
-                    bilingual_audio += AudioSegment.silent(duration=300)  # 300ms pause
-                    
-                    # Clean up temp file
-                    english_file.unlink()
+                # Add English audio (if generation was successful)
+                if tts_results.get(i, False) and english_files[i].exists():
+                    try:
+                        english_audio = AudioSegment.from_file(str(english_files[i]))
+                        bilingual_audio += english_audio
+                        bilingual_audio += AudioSegment.silent(duration=300)  # 300ms pause
+                    except Exception as e:
+                        print(f"⚠️  Could not load English audio for sentence {i+1}: {e}")
+                        # Continue without English audio for this segment
                 
                 # Add original Japanese segment
                 japanese_segment = original[start_ms:end_ms]
@@ -650,13 +748,26 @@ class AudioTranslator:
                 
                 last_end_time = end_ms
                 
-                # Update progress
-                segment_progress = ((i + 1) / total_segments) * 100
-                progress_tracker.update_step('audio_gen', segment_progress, f"Generating segment {i+1}/{total_segments}")
+                # Update assembly progress (60-90%)
+                assembly_progress = 60 + ((i + 1) / total_segments) * 30
+                progress_tracker.update_step('audio_gen', assembly_progress, f"Assembling segment {i+1}/{total_segments}")
             
             # Add any remaining audio
             if last_end_time < len(original):
                 remaining = original[last_end_time:]
+                bilingual_audio += remaining
+            
+            # Export bilingual audio
+            bilingual_file = output_dir / f"{original_audio.stem}_bilingual.mp3"
+            bilingual_audio.export(str(bilingual_file), format="mp3")
+            
+            # Clean up temporary English audio files
+            for english_file in english_files.values():
+                try:
+                    if english_file.exists():
+                        english_file.unlink()
+                except:
+                    pass
                 bilingual_audio += remaining
             
             # Export bilingual audio

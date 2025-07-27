@@ -9,26 +9,42 @@ import sys
 from pathlib import Path
 
 
-def run_translation_with_progress(translator, input_file, output_dir, progress_tracker, separate_files=False):
-    """Run audio translation with progress tracking."""
+def run_translation_with_progress(translator, input_file, output_dir, progress_tracker, separate_files=False, use_parallel=True, merge_segments=True):
+    """Run audio translation with progress tracking.
+    
+    Args:
+        translator: AudioTranslator instance
+        input_file: Path to input audio file
+        output_dir: Output directory for processed files
+        progress_tracker: Progress tracking instance
+        separate_files: Whether to keep files separate
+        use_parallel: Whether to use parallel processing for translation and TTS (much faster)
+        merge_segments: Whether to merge short Whisper segments into longer sentences
+    """
     try:
         # Extract sentences with Whisper (0-30% of translation step)
-        sentences = translator.extract_sentences_whisper(input_file, progress_tracker)
+        sentences = translator.extract_sentences_whisper(input_file, progress_tracker, merge_segments=merge_segments)
         
         if not sentences:
             return False
         
-        # Translate sentences with GPT (30-100% of translation step)  
-        translated_sentences = translator.translate_sentences(sentences, progress_tracker)
+        # Translate sentences (30-100% of translation step)
+        if use_parallel:
+            # Use parallel translation (much faster for multiple sentences)
+            translated_sentences = translator.translate_sentences_parallel(sentences, progress_tracker)
+        else:
+            # Use sequential translation (original method)
+            translated_sentences = translator.translate_sentences(sentences, progress_tracker)
+            
         progress_tracker.update_step('translation', 100, "Translation complete")
         
         if not translated_sentences:
             return False
         
-        # Start audio generation phase
-        progress_tracker.update_step('audio_gen', 0, "Generating bilingual audio")
+        # Start audio generation phase (now with parallel TTS)
+        progress_tracker.update_step('audio_gen', 0, "Generating bilingual audio with parallel TTS")
         
-        # Create bilingual audio with progress updates
+        # Create bilingual audio with progress updates (now uses parallel TTS internally)
         output_file = translator.create_bilingual_audio_with_progress(
             input_file, translated_sentences, output_dir, progress_tracker, separate_files
         )

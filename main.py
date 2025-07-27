@@ -22,6 +22,155 @@ import youtube_downloader
 import translator_interface
 
 
+def collect_multiple_inputs():
+    """Collect multiple URLs or files from user input."""
+    inputs = {'urls': [], 'files': []}
+    
+    print("🎌 YouTube CI Converter - Batch Processing")
+    print("=" * 50)
+    print("Enter YouTube URLs or file paths. Press Enter on empty line to start processing.")
+    print("📝 Examples:")
+    print("  https://youtu.be/VIDEO_ID")
+    print("  C:\\path\\to\\audio.mp3")
+    print("  /path/to/audio.mp3")
+    print()
+    
+    while True:
+        try:
+            user_input = input("Enter URL or file path (empty to finish): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n❌ Input cancelled")
+            break
+        
+        if not user_input:
+            break
+            
+        # Check if it's a YouTube URL
+        if utils.is_valid_youtube_url(user_input):
+            inputs['urls'].append(user_input)
+            print(f"✅ Added YouTube URL: {user_input}")
+        else:
+            # Treat as file path
+            file_path = Path(user_input)
+            if file_path.exists() and file_path.suffix.lower() == '.mp3':
+                inputs['files'].append(str(file_path))
+                print(f"✅ Added file: {file_path.name}")
+            elif file_path.exists():
+                print(f"⚠️  Warning: {file_path.name} is not an MP3 file, skipping")
+            else:
+                print(f"⚠️  Warning: File not found: {user_input}, skipping")
+    
+    return inputs
+
+def process_multiple_inputs(inputs, output_dir, args):
+    """Process multiple URLs and files in batch."""
+    total_items = len(inputs['urls']) + len(inputs['files'])
+    
+    if total_items == 0:
+        print("❌ No valid inputs provided")
+        return False
+    
+    print(f"\n📊 Processing {total_items} items:")
+    print(f"  🔗 YouTube URLs: {len(inputs['urls'])}")
+    print(f"  📁 Local files: {len(inputs['files'])}")
+    print()
+    
+    # Get API key once for all processing
+    api_key = args.openai_key or os.getenv('OPENAI_API_KEY')
+    if not api_key:
+        print("❌ OpenAI API key required. Set OPENAI_API_KEY env var or use --openai-key")
+        return False
+    
+    success_count = 0
+    error_count = 0
+    
+    # Process all URLs
+    for i, url in enumerate(inputs['urls'], 1):
+        print(f"\n{'='*60}")
+        print(f"🔗 Processing YouTube URL {i}/{len(inputs['urls'])}: {url}")
+        print(f"{'='*60}")
+        
+        try:
+            # Create args object for this URL
+            url_args = argparse.Namespace(**vars(args))
+            url_args.url = [url]  # Make it a list since we changed to action='append'
+            url_args.file = None
+            
+            # Initialize progress tracker for this item
+            tracker = pt.UnifiedProgressTracker()
+            
+            # Process the YouTube URL
+            input_file, video_title, video_output_dir = process_youtube_url(url_args, output_dir, tracker)
+            
+            # Run translation
+            use_parallel = not args.no_parallel
+            merge_segments = not args.short_segments
+            success = run_translation(input_file, video_output_dir, tracker, api_key, 
+                                    args.keep_transcript, args.separate_files, use_parallel, merge_segments)
+            
+            if success:
+                print(f"✅ Successfully processed: {video_title}")
+                success_count += 1
+            else:
+                print(f"❌ Failed to process: {url}")
+                error_count += 1
+                
+        except KeyboardInterrupt:
+            print(f"\n❌ Processing cancelled by user at URL {i}")
+            break
+        except Exception as e:
+            print(f"❌ Error processing {url}: {e}")
+            error_count += 1
+    
+    # Process all files
+    for i, file_path in enumerate(inputs['files'], 1):
+        print(f"\n{'='*60}")
+        print(f"📁 Processing file {i}/{len(inputs['files'])}: {Path(file_path).name}")
+        print(f"{'='*60}")
+        
+        try:
+            # Create args object for this file
+            file_args = argparse.Namespace(**vars(args))
+            file_args.file = [file_path]  # Make it a list since we changed to action='append'
+            file_args.url = None
+            
+            # Initialize progress tracker for this item
+            tracker = pt.UnifiedProgressTracker()
+            
+            # Process the file
+            input_file, video_title, video_output_dir = process_existing_file(file_args, output_dir, tracker)
+            
+            # Run translation
+            use_parallel = not args.no_parallel
+            merge_segments = not args.short_segments
+            success = run_translation(input_file, video_output_dir, tracker, api_key, 
+                                    args.keep_transcript, args.separate_files, use_parallel, merge_segments)
+            
+            if success:
+                print(f"✅ Successfully processed: {Path(file_path).name}")
+                success_count += 1
+            else:
+                print(f"❌ Failed to process: {file_path}")
+                error_count += 1
+                
+        except KeyboardInterrupt:
+            print(f"\n❌ Processing cancelled by user at file {i}")
+            break
+        except Exception as e:
+            print(f"❌ Error processing {file_path}: {e}")
+            error_count += 1
+    
+    # Summary
+    print(f"\n{'='*60}")
+    print(f"📊 Batch Processing Complete")
+    print(f"{'='*60}")
+    print(f"✅ Successful: {success_count}")
+    print(f"❌ Failed: {error_count}")
+    print(f"📂 Output directory: {output_dir}")
+    
+    return success_count > 0
+
+
 def check_dependencies():
     """Check for required system dependencies."""
     
@@ -41,7 +190,10 @@ def check_dependencies():
 
 def process_existing_file(args, output_dir, progress_tracker):
     """Process an existing MP3 file."""
-    input_file = Path(args.file)
+    # Handle both single file and list of files (for backward compatibility)
+    file_path = args.file[0] if isinstance(args.file, list) else args.file
+    
+    input_file = Path(file_path)
     if not input_file.exists():
         print(f"❌ File not found: {input_file}")
         sys.exit(1)
@@ -78,11 +230,12 @@ def process_existing_file(args, output_dir, progress_tracker):
 
 def process_youtube_url(args, output_dir, progress_tracker):
     """Download and process a YouTube URL."""
-    if not utils.is_valid_youtube_url(args.url):
+    # Handle both single URL and list of URLs (for backward compatibility)
+    url = args.url[0] if isinstance(args.url, list) else args.url
+    
+    if not utils.is_valid_youtube_url(url):
         print("❌ Error: Invalid YouTube URL provided.")
         sys.exit(1)
-    
-    url = args.url
     
     # Start progress tracking
     progress_tracker.start("🎌 YouTube CI Converter")
@@ -102,8 +255,13 @@ def process_youtube_url(args, output_dir, progress_tracker):
         sys.exit(1)
 
 
-def run_translation(input_file, video_output_dir, progress_tracker, api_key, keep_transcript=False, separate_files=False):
-    """Run the translation process."""
+def run_translation(input_file, video_output_dir, progress_tracker, api_key, keep_transcript=False, separate_files=False, use_parallel=True, merge_segments=True):
+    """Run the translation process with optional parallel processing and segment merging.
+    
+    Args:
+        use_parallel: If True, uses parallel processing for faster translation and TTS generation
+        merge_segments: If True, merges short Whisper segments into longer sentences
+    """
     # Get the AudioTranslator class
     AudioTranslator = translator_interface.get_audio_translator_class()
     if not AudioTranslator:
@@ -113,8 +271,10 @@ def run_translation(input_file, video_output_dir, progress_tracker, api_key, kee
     # Initialize translator
     translator = AudioTranslator(api_key)
     
-    # Run translation with progress tracking
-    output_file = translator_interface.run_translation_with_progress(translator, input_file, video_output_dir, progress_tracker, separate_files)
+    # Run translation with progress tracking (now with parallel processing and segment merging options)
+    output_file = translator_interface.run_translation_with_progress(
+        translator, input_file, video_output_dir, progress_tracker, separate_files, use_parallel, merge_segments
+    )
     
     if output_file:
         progress_tracker.finish("✅ Complete")
@@ -166,10 +326,16 @@ def main():
         epilog="Examples:\n"
                "  python main.py --url https://youtu.be/VIDEO_ID\n"
                "  python main.py --file podcast.mp3\n"
+               "  python main.py --url https://youtu.be/VIDEO_ID1 --url https://youtu.be/VIDEO_ID2\n"
+               "  python main.py --file audio1.mp3 --file audio2.mp3\n"
+               "  python main.py  # Interactive mode - prompts for multiple URLs/files\n"
                "  python main.py --url https://youtu.be/VIDEO_ID --keep-transcript\n"
                "  python main.py --url https://youtu.be/VIDEO_ID --separate-files\n"
+               "  python main.py --url https://youtu.be/VIDEO_ID --no-parallel  # Slower but more compatible\n"
                "  python main.py --setup\n"
                "  python main.py --test\n\n"
+               "Performance: Uses high-concurrency parallel processing by default for much faster translation and TTS.\n"
+               "Use --no-parallel if you experience API rate limiting or compatibility issues.\n\n"
                "Output: Creates a folder structure in ~/Downloads/YouTube CI Converter/:\n"
                "  - YouTube CI Converter/[Channel Name]/\n"
                "    - YYYY-MM-DD_VideoTitle_complete.mp3 (default: bilingual + original)\n"
@@ -181,11 +347,13 @@ def main():
     )
     parser.add_argument(
         '--url', '-u',
-        help='YouTube URL to convert'
+        action='append',
+        help='YouTube URL to convert (can be used multiple times for batch processing)'
     )
     parser.add_argument(
         '--file', '-f',
-        help='Existing MP3 file to process (alternative to --url)'
+        action='append',
+        help='Existing MP3 file to process (can be used multiple times for batch processing)'
     )
     parser.add_argument(
         '--output', '-o',
@@ -215,6 +383,16 @@ def main():
         action='store_true',
         help='Keep bilingual and original audio as separate files (default: combined into one file)'
     )
+    parser.add_argument(
+        '--no-parallel',
+        action='store_true',
+        help='Disable parallel processing for translation and TTS (slower but more compatible)'
+    )
+    parser.add_argument(
+        '--short-segments',
+        action='store_true',
+        help='Keep Whisper segments short instead of merging into longer sentences'
+    )
     
     args = parser.parse_args()
     
@@ -231,14 +409,72 @@ def main():
         success = tests.run_all_tests()
         sys.exit(0 if success else 1)
     
-    # Validate that either --url or --file is provided, but not both (unless --setup or --test is used)
+    # Validate and collect inputs
     if not args.setup and not args.test:
-        if not args.url and not args.file:
-            parser.error("Either --url or --file must be provided")
-        if args.url and args.file:
-            parser.error("Cannot use both --url and --file at the same time")
+        # Check if we have any command line inputs
+        has_urls = args.url and len(args.url) > 0
+        has_files = args.file and len(args.file) > 0
+        
+        if not has_urls and not has_files:
+            # No command line inputs - collect interactively
+            inputs = collect_multiple_inputs()
+            
+            # Check dependencies
+            check_dependencies()
+            
+            # Get output directory
+            if args.output:
+                output_dir = Path(args.output)
+                output_dir.mkdir(parents=True, exist_ok=True)
+            else:
+                output_dir = utils.get_output_directory()
+            
+            # Process all collected inputs
+            success = process_multiple_inputs(inputs, output_dir, args)
+            sys.exit(0 if success else 1)
+        
+        elif has_urls and has_files:
+            # Both provided via command line - process all
+            inputs = {'urls': args.url, 'files': args.file}
+            
+            # Check dependencies
+            check_dependencies()
+            
+            # Get output directory
+            if args.output:
+                output_dir = Path(args.output)
+                output_dir.mkdir(parents=True, exist_ok=True)
+            else:
+                output_dir = utils.get_output_directory()
+            
+            # Process all inputs
+            success = process_multiple_inputs(inputs, output_dir, args)
+            sys.exit(0 if success else 1)
+        
+        else:
+            # Single input type provided via command line
+            if has_urls:
+                inputs = {'urls': args.url, 'files': []}
+            else:
+                inputs = {'urls': [], 'files': args.file}
+            
+            # For single inputs, use batch processing if multiple items
+            if len(inputs['urls']) + len(inputs['files']) > 1:
+                # Check dependencies
+                check_dependencies()
+                
+                # Get output directory
+                if args.output:
+                    output_dir = Path(args.output)
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                else:
+                    output_dir = utils.get_output_directory()
+                
+                # Process all inputs
+                success = process_multiple_inputs(inputs, output_dir, args)
+                sys.exit(0 if success else 1)
     
-    # Check dependencies
+    # Handle single input (backward compatibility)
     check_dependencies()
     
     # Get output directory
@@ -251,12 +487,15 @@ def main():
     # Initialize unified progress tracker
     tracker = pt.UnifiedProgressTracker()
     
-    # Process input: either YouTube URL or existing file
+    # Process single input: either YouTube URL or existing file
     try:
-        if args.file:
+        if args.file and len(args.file) > 0:
             input_file, video_title, video_output_dir = process_existing_file(args, output_dir, tracker)
-        else:
+        elif args.url and len(args.url) > 0:
             input_file, video_title, video_output_dir = process_youtube_url(args, output_dir, tracker)
+        else:
+            print("❌ No input provided")
+            sys.exit(1)
         
         # Get API key
         api_key = args.openai_key or os.getenv('OPENAI_API_KEY')
@@ -265,8 +504,10 @@ def main():
             print("❌ OpenAI API key required. Set OPENAI_API_KEY env var or use --openai-key")
             sys.exit(1)
         
-        # Run translation
-        success = run_translation(input_file, video_output_dir, tracker, api_key, args.keep_transcript, args.separate_files)
+        # Run translation with parallel processing and segment merging options
+        use_parallel = not args.no_parallel  # Default to parallel unless --no-parallel is specified
+        merge_segments = not args.short_segments  # Default to merge unless --short-segments is specified
+        success = run_translation(input_file, video_output_dir, tracker, api_key, args.keep_transcript, args.separate_files, use_parallel, merge_segments)
         
         if not success:
             sys.exit(1)
