@@ -80,18 +80,25 @@ class TestUtils(unittest.TestCase):
 
     def test_get_output_directory(self):
         """Test output directory creation."""
-        with patch('utils.Path') as mock_path:
-            mock_script_dir = MagicMock()
-            mock_output_dir = MagicMock()
+        with patch('utils.Path') as mock_path_class:
+            # Mock Path.home() to return a mock home directory
+            mock_home = MagicMock()
+            mock_path_class.home.return_value = mock_home
             
-            # Mock the path chain: __file__.parent.parent / "output"
-            mock_path.return_value.parent.parent = mock_script_dir
-            mock_script_dir.__truediv__.return_value = mock_output_dir
+            # Mock the Downloads directory path
+            mock_downloads = MagicMock()
+            mock_home.__truediv__.return_value = mock_downloads
+            
+            # Mock the final output directory
+            mock_output_dir = MagicMock()
+            mock_downloads.__truediv__.return_value = mock_output_dir
             
             result = utils.get_output_directory()
             
             # Verify the path was constructed correctly
-            mock_script_dir.__truediv__.assert_called_once_with("output")
+            mock_path_class.home.assert_called_once()
+            mock_home.__truediv__.assert_called_once_with("Downloads")
+            mock_downloads.__truediv__.assert_called_once_with("YouTube CI Converter")
             mock_output_dir.mkdir.assert_called_once_with(exist_ok=True)
             self.assertEqual(result, mock_output_dir)
 

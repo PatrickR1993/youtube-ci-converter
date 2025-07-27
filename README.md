@@ -47,8 +47,17 @@ ytcc --url "https://youtu.be/VIDEO_ID" --file "local_audio.mp3"
 ```bash
 git clone https://github.com/PatrickR1993/youtube-ci-converter.git
 cd youtube-ci-converter
-ytcc --setup  # Installs dependencies and tests system
+ytcc --setup  # Installs dependencies, adds ytcc to PATH, and tests system
 ```
+
+**What `ytcc --setup` does:**
+- ✅ Checks Python 3.6+ and FFmpeg installation
+- ✅ Installs all Python dependencies
+- ✅ **Adds `ytcc` to your system PATH** (works on Windows, macOS, and Linux)
+- ✅ Creates necessary directories
+- ✅ Tests the installation
+
+**After setup:** Restart your terminal and you can run `ytcc` from anywhere!
 
 ### 2. Install FFmpeg
 - **Windows**: Download from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH
@@ -127,6 +136,20 @@ The `_complete.mp3` file contains:
 | **Permission errors** | Run from a directory with write permissions |
 | **Rate limiting** | Use `--no-parallel` for more conservative API usage |
 | **Large files fail Whisper** | Tool automatically splits files and retries (up to 4 attempts)<br>Supports files up to 16x original Whisper limit |
+| **ytcc command not found** | Run `ytcc --setup` again, then restart your terminal |
+
+## 🗑️ Uninstalling
+
+To completely remove ytcc from your system:
+
+```bash
+python src/setup.py --uninstall
+```
+
+This will:
+- ✅ Remove ytcc from your system PATH
+- ✅ Delete all installed files
+- ✅ Clean up registry entries (Windows) or shell profiles (macOS/Linux)
 
 ## 🧪 Testing
 

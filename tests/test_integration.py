@@ -87,7 +87,7 @@ class TestYtccIntegration(unittest.TestCase):
             
             # Test basic progress tracking methods
             self.assertTrue(hasattr(tracker, 'start'))
-            self.assertTrue(hasattr(tracker, 'update'))
+            self.assertTrue(hasattr(tracker, 'update_step'))
             self.assertTrue(hasattr(tracker, 'finish'))
         except ImportError as e:
             self.fail(f"Failed to import progress_tracker module: {e}")

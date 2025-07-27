@@ -57,19 +57,20 @@ class QuickFunctionalTest(unittest.TestCase):
         tracker = UnifiedProgressTracker()
         
         # Test initialization
-        self.assertEqual(len(tracker.step_weights), 3)
-        self.assertIn('download', tracker.step_weights)
-        self.assertIn('translation', tracker.step_weights)
-        self.assertIn('audio_gen', tracker.step_weights)
+        self.assertIsNone(tracker.start_time)
+        self.assertIsNone(tracker.current_step)
         
-        # Test that weights sum to 100
-        total_weights = sum(tracker.step_weights.values())
-        self.assertEqual(total_weights, 100)
+        # Test start functionality
+        tracker.start("Test Process")
+        self.assertIsNotNone(tracker.start_time)
         
-        # Test step progress initialization
-        self.assertEqual(len(tracker.step_progress), 3)
-        for step in tracker.step_progress:
-            self.assertEqual(tracker.step_progress[step], 0)
+        # Test step update functionality
+        tracker.update_step('download', 50, 'Downloading video...')
+        self.assertEqual(tracker.current_step, ('download', 'Downloading video...'))
+        
+        # Test finish functionality
+        tracker.finish("Test Complete")
+        # Should not raise any exceptions
 
 
 def run_quick_test():
