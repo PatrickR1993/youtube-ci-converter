@@ -144,7 +144,7 @@ def test_installation():
         return False
 
 def run_setup():
-    """Main setup function - callable from main.py."""
+    """Main setup function - callable from ytcc CLI."""
     return main()
 
 
@@ -193,19 +193,19 @@ def main():
     
     print(f"\n📖 Usage Examples:")
     print("1. Download YouTube video and translate Japanese audio:")
-    print("   python main.py --url https://youtu.be/VIDEO_ID")
+    print("   ytcc --url https://youtu.be/VIDEO_ID")
     
     print("\n2. Process existing MP3 file:")
-    print("   python main.py --file your_podcast.mp3")
+    print("   ytcc --file your_podcast.mp3")
     
     print("\n3. With custom output directory:")
-    print("   python main.py --url https://youtu.be/VIDEO_ID --output /custom/path")
+    print("   ytcc --url https://youtu.be/VIDEO_ID --output /custom/path")
     
     print("\n4. With API key (if not set as environment variable):")
-    print("   python main.py --url https://youtu.be/VIDEO_ID --openai-key YOUR_API_KEY")
+    print("   ytcc --url https://youtu.be/VIDEO_ID --openai-key YOUR_API_KEY")
     
     print("\n5. Run setup again:")
-    print("   python main.py --setup")
+    print("   ytcc --setup")
     
     print(f"\n🔑 Required for translation:")
     print("   - OpenAI API key: https://platform.openai.com/api-keys")

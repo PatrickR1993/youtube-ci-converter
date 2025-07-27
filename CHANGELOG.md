@@ -5,13 +5,30 @@ All notable changes to YouTube CI Converter will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2025-07-27
+
+### Added
+- **Professional CLI**: Introduced `ytcc` command as the primary interface
+- **Windows Support**: Added `ytcc.bat` for seamless Windows usage
+- **Batch Processing**: Enhanced support for multiple URLs and files in single command
+
+### Changed
+- **Primary Interface**: `ytcc` is now the recommended command instead of `python main.py`
+- **Documentation**: Updated all examples to use the new `ytcc` command
+
+### Removed
+- **Legacy Code**: Removed deprecated `main.py` legacy redirect code
+- **Backward Compatibility**: No longer supporting `python main.py` interface
+
+---
+
 ## [1.1.0] - 2025-01-22
 
 ### Added
-- **Tests**: Run unittests with python main.py --test
+- **Tests**: Run unittests with ytcc --test
 
 ### Refactored
-- **Project Structure**: Moved scripts to modules in /src, interact through main.py
+- **Project Structure**: Moved scripts to modules in /src, interact through ytcc CLI tool
 
 ---
 

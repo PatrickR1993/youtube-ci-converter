@@ -1,4 +1,4 @@
-# YouTube CI Converter
+# YouTube CI Converter (ytcc)
 
 A powerful CLI tool that downloads YouTube videos and creates bilingual audio files with English translations spoken before each Japanese sentence.
 
@@ -18,22 +18,22 @@ A powerful CLI tool that downloads YouTube videos and creates bilingual audio fi
 ### 1. Basic Usage
 ```bash
 # Download and translate a YouTube video
-python main.py --url "https://youtu.be/VIDEO_ID"
+ytcc --url "https://youtu.be/VIDEO_ID"
 
 # Process an existing MP3 file
-python main.py --file "your_podcast.mp3"
+ytcc --file "your_podcast.mp3"
 
 # With API key (if not set as environment variable)
-python main.py --url "https://youtu.be/VIDEO_ID" --openai-key YOUR_API_KEY
+ytcc --url "https://youtu.be/VIDEO_ID" --openai-key YOUR_API_KEY
 ```
 
 ### 2. Batch Processing
 ```bash
 # Interactive mode - prompts for multiple URLs/files
-python main.py
+ytcc
 
 # Mix URLs and files
-python main.py --url "https://youtu.be/VIDEO_ID" --file "local_audio.mp3"
+ytcc --url "https://youtu.be/VIDEO_ID" --file "local_audio.mp3"
 ```
 
 ## 🛠️ Installation & Setup
@@ -47,7 +47,7 @@ python main.py --url "https://youtu.be/VIDEO_ID" --file "local_audio.mp3"
 ```bash
 git clone https://github.com/PatrickR1993/youtube-ci-converter.git
 cd youtube-ci-converter
-python main.py --setup  # Installs dependencies and tests system
+ytcc --setup  # Installs dependencies and tests system
 ```
 
 ### 2. Install FFmpeg
@@ -132,13 +132,13 @@ The `_complete.mp3` file contains:
 
 ```bash
 # Run comprehensive test suite
-python main.py --test
+ytcc --test
 
 # Quick functional test
 python tests/quick_test.py
 
 # View all available options
-python main.py --help
+ytcc --help
 ```
 
 ## 📜 License
