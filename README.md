@@ -1,4 +1,4 @@
-# YouTube CI Converter
+# YouTube CI Converter (ytcc)
 
 A powerful CLI tool that downloads YouTube videos and creates bilingual audio files with English translations spoken before each Japanese sentence.
 
@@ -7,8 +7,6 @@ A powerful CLI tool that downloads YouTube videos and creates bilingual audio fi
 - 🎵 **YouTube Download**: Convert Japanese YouTube videos to bilingual audio + original audio in one file
 - 🎌 **Japanese Speech Recognition**: OpenAI Whisper API for accurate transcription
 - 🌐 **AI Translation**: GPT models for natural English translations
-- ⚡ **Parallel Processing**: Fast translation and TTS generation using concurrent API requests
-- 🔄 **Smart File Recovery**: Automatic file splitting and retry on Whisper failures (up to 4 attempts)
 - 📦 **Batch Processing**: Process multiple YouTube URLs and local files in one command
 - 📁 **Smart File Organization**: Videos organized by channel with upload dates (YYYY-MM-DD format)
 - 🎙️ **Bilingual Audio**: English→Japanese pattern with timing preservation
@@ -20,30 +18,22 @@ A powerful CLI tool that downloads YouTube videos and creates bilingual audio fi
 ### 1. Basic Usage
 ```bash
 # Download and translate a YouTube video
-python main.py --url "https://youtu.be/VIDEO_ID"
+ytcc --url "https://youtu.be/VIDEO_ID"
 
 # Process an existing MP3 file
-python main.py --file "your_podcast.mp3"
+ytcc --file "your_podcast.mp3"
 
 # With API key (if not set as environment variable)
-python main.py --url "https://youtu.be/VIDEO_ID" --openai-key YOUR_API_KEY
+ytcc --url "https://youtu.be/VIDEO_ID" --openai-key YOUR_API_KEY
 ```
 
 ### 2. Batch Processing
 ```bash
-# Process multiple YouTube videos
-python main.py --url "https://youtu.be/VIDEO_ID1" --url "https://youtu.be/VIDEO_ID2"
-
-# Process multiple audio files
-python main.py --file "audio1.mp3" --file "audio2.mp3"
-
 # Interactive mode - prompts for multiple URLs/files
-python main.py
+ytcc
 
 # Mix URLs and files
-python main.py --url "https://youtu.be/VIDEO_ID" --file "local_audio.mp3"
-```
-
+ytcc --url "https://youtu.be/VIDEO_ID" --file "local_audio.mp3"
 ```
 
 ## 🛠️ Installation & Setup
@@ -57,8 +47,17 @@ python main.py --url "https://youtu.be/VIDEO_ID" --file "local_audio.mp3"
 ```bash
 git clone https://github.com/PatrickR1993/youtube-ci-converter.git
 cd youtube-ci-converter
-python main.py --setup  # Installs dependencies and tests system
+ytcc --setup  # Installs dependencies, adds ytcc to PATH, and tests system
 ```
+
+**What `ytcc --setup` does:**
+- ✅ Checks Python 3.6+ and FFmpeg installation
+- ✅ Installs all Python dependencies
+- ✅ **Adds `ytcc` to your system PATH** (works on Windows, macOS, and Linux)
+- ✅ Creates necessary directories
+- ✅ Tests the installation
+
+**After setup:** Restart your terminal and you can run `ytcc` from anywhere!
 
 ### 2. Install FFmpeg
 - **Windows**: Download from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH
@@ -118,35 +117,6 @@ The `_complete.mp3` file contains:
 2. **🔔 Audio Cue**: Brief silence + gentle beep + silence (separates sections)  
 3. **📼 Original Section**: Complete original Japanese audio
 
-**Benefits:**
-- ✅ Practice with translations first
-- ✅ Hear the original after for comparison  
-- ✅ Everything in one convenient file
-- ✅ Clean, organized output folder
-
-### 🔗 Smart Sentence Merging (Default)
-
-The tool automatically merges short Whisper segments into longer, more natural sentences:
-
-**Merging Logic:**
-- ✅ Combines segments with gaps **< 2 seconds**
-- ✅ Respects sentence-ending punctuation (`。！？.!?`)
-- ✅ Splits very long sentences (>200 characters)
-- ✅ Considers capitalization and natural speech patterns
-
-**Example:**
-```
-Short segments: "こんにちは" → "今日は" → "いい天気ですね"
-Merged sentence: "こんにちは 今日は いい天気ですね"
-```
-
-**Benefits:**
-- 📈 **Better translations**: Longer context improves GPT translation quality
-- 🎵 **Natural audio flow**: Fewer interruptions in bilingual audio
-- 💰 **Cost efficient**: Fewer API calls for translation and TTS
-
-Use `--short-segments` to disable merging if you prefer the original short segments.
-
 ## 💰 Cost & Performance
 
 | Service | Usage | Cost |
@@ -166,18 +136,32 @@ Use `--short-segments` to disable merging if you prefer the original short segme
 | **Permission errors** | Run from a directory with write permissions |
 | **Rate limiting** | Use `--no-parallel` for more conservative API usage |
 | **Large files fail Whisper** | Tool automatically splits files and retries (up to 4 attempts)<br>Supports files up to 16x original Whisper limit |
+| **ytcc command not found** | Run `ytcc --setup` again, then restart your terminal |
+
+## 🗑️ Uninstalling
+
+To completely remove ytcc from your system:
+
+```bash
+python src/setup.py --uninstall
+```
+
+This will:
+- ✅ Remove ytcc from your system PATH
+- ✅ Delete all installed files
+- ✅ Clean up registry entries (Windows) or shell profiles (macOS/Linux)
 
 ## 🧪 Testing
 
 ```bash
 # Run comprehensive test suite
-python main.py --test
+ytcc --test
 
 # Quick functional test
 python tests/quick_test.py
 
 # View all available options
-python main.py --help
+ytcc --help
 ```
 
 ## 📜 License

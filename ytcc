@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-YouTube CI Converter - Main Entry Point
-A command-line tool to download YouTube videos and translate Japanese audio to English with bilingual output.
+YouTube CI Converter (ytcc) - Professional Command-Line Tool
+A powerful CLI tool to download YouTube videos and translate Japanese audio to English with bilingual output.
 """
 
 import os
@@ -26,8 +26,8 @@ def collect_multiple_inputs():
     """Collect multiple URLs or files from user input."""
     inputs = {'urls': [], 'files': []}
     
-    print("🎌 YouTube CI Converter - Batch Processing")
-    print("=" * 50)
+    print("🎌 YouTube CI Converter (ytcc) - Batch Processing")
+    print("=" * 55)
     print("Enter YouTube URLs or file paths. Press Enter on empty line to start processing.")
     print("📝 Examples:")
     print("  https://youtu.be/VIDEO_ID")
@@ -172,9 +172,8 @@ def process_multiple_inputs(inputs, output_dir, args):
 
 
 def check_dependencies():
-    """Check for required system dependencies."""
-    
-    # Check for FFmpeg dependency
+    """Check if required dependencies are available."""
+    # Check if FFmpeg is available
     try:
         subprocess.run(['ffmpeg', '-version'], 
                       stdout=subprocess.DEVNULL, 
@@ -205,27 +204,21 @@ def process_existing_file(args, output_dir, progress_tracker):
     channel_name = "Local Files"
     video_title = input_file.stem
     sanitized_channel = utils.sanitize_filename(channel_name)
-    sanitized_title = utils.sanitize_filename(video_title)
     
-    # Create channel directory structure
+    # Create channel directory inside output_dir
     channel_output_dir = output_dir / sanitized_channel
     channel_output_dir.mkdir(exist_ok=True)
-    video_output_dir = channel_output_dir
     
-    # Copy the file to the channel output directory if it's not already there
-    if input_file.parent != video_output_dir:
-        new_input_file = video_output_dir / input_file.name
-        if not new_input_file.exists():
-            import shutil
-            shutil.copy2(input_file, new_input_file)
-        input_file = new_input_file
+    # Start progress tracking
+    progress_tracker.start("🎌 YouTube CI Converter")
     
-    print(f"📁 Processing: {input_file.name}")
-    print(f"📂 Channel folder: {channel_name}")
-    progress_tracker.start("Processing audio file")
-    progress_tracker.update_step('download', 100, "File ready")  # Skip download step
+    # Copy file to channel directory with proper naming
+    import shutil
+    target_file = channel_output_dir / f"{video_title}.mp3"
+    if not target_file.exists():
+        shutil.copy2(input_file, target_file)
     
-    return input_file, video_title, video_output_dir
+    return target_file, video_title, channel_output_dir
 
 
 def process_youtube_url(args, output_dir, progress_tracker):
@@ -241,14 +234,20 @@ def process_youtube_url(args, output_dir, progress_tracker):
     progress_tracker.start("🎌 YouTube CI Converter")
     
     # Download and convert
-    downloaded_file, video_title, channel_name = youtube_downloader.download_youtube_video(url, output_dir, progress_tracker)
+    downloader = youtube_downloader.YouTubeDownloader(output_dir)
+    downloaded_file = downloader.download_and_convert(url, progress_tracker)
     
-    if downloaded_file and video_title and channel_name:
-        input_file = downloaded_file
+    if downloaded_file:
+        # Extract video info for naming
+        video_info = downloader.get_video_info(url)
+        video_title = video_info.get('title', 'Unknown Video')
+        channel_name = video_info.get('uploader', 'Unknown Channel')
+        
+        # The downloaded file is already in the correct channel directory
         video_output_dir = downloaded_file.parent  # This is already the channel directory
         print(f"📂 Channel: {channel_name}")
         print(f"📁 Video: {video_title}")
-        return input_file, video_title, video_output_dir
+        return downloaded_file, video_title, video_output_dir
     else:
         progress_tracker.finish("❌ Download failed")
         print("❌ Could not download or find MP3 file")
@@ -287,31 +286,23 @@ def run_translation(input_file, video_output_dir, progress_tracker, api_key, kee
             print(f"\n🎉 Translation completed successfully!")
             print(f"📂 Channel folder: {video_output_dir}")
             if separate_files:
-                print(f"🎵 Original audio: {input_file}")
-                print(f"🎵 Bilingual audio: {output_file}")
+                print(f"🎵 Bilingual audio: {video_output_dir / f'{input_file.stem}_bilingual.mp3'}")
+                print(f"📼 Original audio: {input_file}")
             else:
-                print(f"🎵 Complete audio: {output_file} (bilingual + original combined)")
+                print(f"🎯 Combined audio: {output_file}")
             print(f"📄 Transcript: {transcript_file}")
         else:
-            # Remove transcript file and don't mention it in output
+            # Remove transcript file if not requested
             if transcript_file.exists():
                 transcript_file.unlink()
-                print(f"\n🎉 Translation completed successfully!")
-                print(f"📂 Channel folder: {video_output_dir}")
-                if separate_files:
-                    print(f"🎵 Original audio: {input_file}")
-                    print(f"🎵 Bilingual audio: {output_file}")
-                else:
-                    print(f"🎵 Complete audio: {output_file} (bilingual + original combined)")
-                print("📄 Transcript file removed (use --keep-transcript to retain)")
+            
+            print(f"\n🎉 Translation completed successfully!")
+            print(f"📂 Channel folder: {video_output_dir}")
+            if separate_files:
+                print(f"🎵 Bilingual audio: {video_output_dir / f'{input_file.stem}_bilingual.mp3'}")
+                print(f"📼 Original audio: {input_file}")
             else:
-                print(f"\n🎉 Translation completed successfully!")
-                print(f"📂 Channel folder: {video_output_dir}")
-                if separate_files:
-                    print(f"🎵 Original audio: {input_file}")
-                    print(f"🎵 Bilingual audio: {output_file}")
-                else:
-                    print(f"🎵 Complete audio: {output_file} (bilingual + original combined)")
+                print(f"🎯 Combined audio: {output_file}")
         
         return True
     else:
@@ -320,20 +311,21 @@ def run_translation(input_file, video_output_dir, progress_tracker, api_key, kee
 
 
 def main():
-    """Main function to run the CLI tool."""
+    """Main function to run the ytcc CLI tool."""
     parser = argparse.ArgumentParser(
-        description="YouTube CI Converter - Download YouTube videos and translate Japanese audio to English with bilingual output",
+        prog='ytcc',
+        description="YouTube CI Converter (ytcc) - Download YouTube videos and translate Japanese audio to English with bilingual output",
         epilog="Examples:\n"
-               "  python main.py --url https://youtu.be/VIDEO_ID\n"
-               "  python main.py --file podcast.mp3\n"
-               "  python main.py --url https://youtu.be/VIDEO_ID1 --url https://youtu.be/VIDEO_ID2\n"
-               "  python main.py --file audio1.mp3 --file audio2.mp3\n"
-               "  python main.py  # Interactive mode - prompts for multiple URLs/files\n"
-               "  python main.py --url https://youtu.be/VIDEO_ID --keep-transcript\n"
-               "  python main.py --url https://youtu.be/VIDEO_ID --separate-files\n"
-               "  python main.py --url https://youtu.be/VIDEO_ID --no-parallel  # Slower but more compatible\n"
-               "  python main.py --setup\n"
-               "  python main.py --test\n\n"
+               "  ytcc --url https://youtu.be/VIDEO_ID\n"
+               "  ytcc --file podcast.mp3\n"
+               "  ytcc --url https://youtu.be/VIDEO_ID1 --url https://youtu.be/VIDEO_ID2\n"
+               "  ytcc --file audio1.mp3 --file audio2.mp3\n"
+               "  ytcc  # Interactive mode - prompts for multiple URLs/files\n"
+               "  ytcc --url https://youtu.be/VIDEO_ID --keep-transcript\n"
+               "  ytcc --url https://youtu.be/VIDEO_ID --separate-files\n"
+               "  ytcc --url https://youtu.be/VIDEO_ID --no-parallel  # Slower but more compatible\n"
+               "  ytcc --setup\n"
+               "  ytcc --test\n\n"
                "Performance: Uses high-concurrency parallel processing by default for much faster translation and TTS.\n"
                "Use --no-parallel if you experience API rate limiting or compatibility issues.\n\n"
                "Output: Creates a folder structure in ~/Downloads/YouTube CI Converter/:\n"
@@ -398,6 +390,7 @@ def main():
     
     # Handle setup command
     if args.setup:
+        sys.path.insert(0, str(Path(__file__).parent / "src"))
         import setup
         sys.exit(0 if setup.run_setup() else 1)
     
