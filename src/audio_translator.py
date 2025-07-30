@@ -768,11 +768,6 @@ class AudioTranslator:
                         english_file.unlink()
                 except:
                     pass
-                bilingual_audio += remaining
-            
-            # Export bilingual audio
-            bilingual_file = output_dir / f"{original_audio.stem}_bilingual.mp3"
-            bilingual_audio.export(str(bilingual_file), format="mp3")
             
             if separate_files:
                 # Keep files separate - return the bilingual file
